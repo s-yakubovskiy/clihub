@@ -14,7 +14,26 @@ local function asset(release, name, gitlab)
 	return gitlab and (item.direct_asset_url or item.url) or item.browser_download_url, item.digest
 end
 
-function M.resolve(id, recipe, platform, pin)
+function M.release_url(recipe, tag)
+	local source = recipe.source
+	if source.kind == "github" then
+		return "https://github.com/" .. source.repo .. "/releases/" .. (tag and "tag/" .. u.encode(tag) or "latest")
+	elseif source.kind == "gitlab" then
+		return source.api:gsub("/api/v4/?$", "")
+			.. "/"
+			.. source.project
+			.. "/-/releases/"
+			.. (tag and u.encode(tag) or "permalink/latest")
+	end
+	if recipe.releases then
+		if not tag and (recipe.releases:find("{tag}", 1, true) or recipe.releases:find("{version}", 1, true)) then
+			return nil
+		end
+		return u.expand(recipe.releases, { tag = tag or "", version = (tag or ""):gsub("^v", "") })
+	end
+end
+
+function M.resolve(id, recipe, platform, pin, opts)
 	require("clihub.registry").validate(id, recipe)
 	local target = assert(recipe.targets[platform], id .. ": no binary for " .. platform)
 	local source, release, tag = recipe.source, nil, pin
@@ -26,7 +45,7 @@ function M.resolve(id, recipe, platform, pin)
 			.. source.repo
 			.. "/releases/"
 			.. (pin and "tags/" .. u.encode(pin) or "latest")
-		release = vim.json.decode(u.fetch(endpoint))
+		release = vim.json.decode(u.fetch(endpoint, opts))
 		tag = release.tag_name
 	elseif source.kind == "gitlab" then
 		local endpoint = source.api:gsub("/$", "")
@@ -75,7 +94,7 @@ function M.resolve(id, recipe, platform, pin)
 		bins = bins,
 		verify = recipe.verify,
 		source = vim.deepcopy(source),
-		fingerprint = vim.fn.sha256(u.canonical(recipe)),
+		fingerprint = u.fingerprint(recipe),
 	}
 end
 

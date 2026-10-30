@@ -142,8 +142,9 @@ local function intact(root, id, receipt, target)
 	return true
 end
 
-function M.apply(root, id, recipe, platform, pin, progress)
+function M.apply(root, id, recipe, platform, pin, progress, opts)
 	progress = progress or function() end
+	opts = opts or {}
 	M.prepare(root)
 	local unlock = M.lock(root)
 	local stage
@@ -152,12 +153,30 @@ function M.apply(root, id, recipe, platform, pin, progress)
 		progress("resolving")
 		local resolved = require("clihub.sources").resolve(id, recipe, platform, pin)
 		local current, old_target = M.current(root, id)
+		if opts.locked then
+			assert(
+				resolved.tag == opts.locked.tag and resolved.fingerprint == opts.locked.fingerprint,
+				"Locked recipe/version mismatch: " .. id
+			)
+			assert(opts.locked.sha256[platform], "No locked checksum for " .. id .. " on " .. platform)
+		end
+		if opts.only_upgrade and current then
+			local comparison = u.compare(resolved.tag, current.tag)
+			assert(
+				comparison ~= nil,
+				"Cannot order release tags for " .. id .. "; use install to explicitly select the upstream release"
+			)
+			if comparison < 0 then
+				return { tag = current.tag, latest = resolved.tag, unchanged = true, newer_installed = true }
+			end
+		end
 		if
 			current
 			and current.tag == resolved.tag
 			and current.platform == platform
 			and current.fingerprint == resolved.fingerprint
 			and intact(root, id, current, old_target)
+			and (not opts.locked or current.sha256 == opts.locked.sha256[platform])
 		then
 			M.reconcile(root, id, current.bins)
 			return { tag = current.tag, unchanged = true }
@@ -172,6 +191,10 @@ function M.apply(root, id, recipe, platform, pin, progress)
 		local expected = checksum.digest or u.checksum(u.fetch(checksum.url), checksum.format, checksum.filename)
 		local actual = u.run({ "sha256sum", "--", archive }):match("^(%x+)")
 		assert(actual and actual:lower() == expected:lower(), "SHA-256 mismatch for " .. id)
+		assert(
+			not opts.locked or actual:lower() == opts.locked.sha256[platform]:lower(),
+			"Lockfile SHA-256 mismatch for " .. id
+		)
 		local payload = stage .. "/payload"
 		u.mkdir(payload)
 		u.mkdir(payload .. "/bin")

@@ -1,4 +1,5 @@
 local M = {}
+local u = require("clihub.util")
 local buffer, window, rows, starts
 local view, expanded = 1, {}
 local namespace = vim.api.nvim_create_namespace("CliHubUI")
@@ -38,7 +39,11 @@ local function geometry()
 		border = "rounded",
 		zindex = 50,
 		footer = {
-			{ width >= 60 and " i install  u install/update  U update all  q close " or " q close ", "CliHubMuted" },
+			{
+				width >= 60 and " R check updates  U update all  o release notes  q close "
+					or " R check  U update  q close ",
+				"CliHubMuted",
+			},
 		},
 		footer_pos = "center",
 	}
@@ -67,7 +72,7 @@ local function selected()
 end
 
 local function is_update(state)
-	return state.installed and state.available and state.installed ~= state.available
+	return not state.pin and u.compare(state.available, state.installed) == 1
 end
 
 local function source_label(source)
@@ -108,19 +113,39 @@ function M.render()
 			{ text, group },
 		})
 	end
-	local states, installed, updates = {}, 0, 0
+	local states, installed, updates, checked, oldest, pending = {}, 0, 0, 0, nil, 0
 	for _, id in ipairs(hub.list()) do
 		local state = hub.status(id)
 		states[#states + 1] = state
 		if state.installed then
 			installed = installed + 1
+			if state.checked_at then
+				checked = checked + 1
+				oldest = math.min(oldest or state.checked_at, state.checked_at)
+			end
+		end
+		if state.progress then
+			pending = pending + 1
 		end
 		if is_update(state) then
 			updates = updates + 1
 		end
 	end
 	centered(" CliHub ", "Title")
-	centered(installed .. " installed · " .. #states .. " tools in your registry", "Muted")
+	centered(
+		installed
+			.. " installed · "
+			.. updates
+			.. " updates"
+			.. (pending > 0 and " · " .. pending .. " active/queued" or ""),
+		"Muted"
+	)
+	centered(
+		installed > 0
+				and ("Checked " .. checked .. "/" .. installed .. " · " .. (oldest and "oldest check " .. u.age(oldest) or "press R to check updates"))
+			or "Choose a tool · i install · u install/update",
+		"Muted"
+	)
 	line()
 	local tabs = { { "  " } }
 	for index, label in ipairs({ "All  " .. #states, "Installed  " .. installed, "Updates  " .. updates }) do
@@ -156,9 +181,22 @@ function M.render()
 				elseif is_update(state) then
 					icon, color, label = "↑", "Update", state.installed .. " → " .. state.available
 				elseif state.pin and state.installed then
-					icon, color, label = "◆", "Pin", state.installed .. "  pinned"
+					icon, color, label =
+						"◆",
+						"Pin",
+						state.installed
+							.. "  pinned"
+							.. (u.compare(state.available, state.installed) == 1 and " · newer available" or "")
+				elseif u.compare(state.available, state.installed) == -1 then
+					icon, color, label = "✓", "Muted", state.installed .. " · newer than upstream"
+				elseif state.installed and state.available and u.compare(state.available, state.installed) == nil then
+					icon, color, label = "?", "Update", state.installed .. " · different release"
 				elseif state.installed then
-					icon, color, label = "✓", "Installed", state.installed
+					icon, color, label =
+						"✓",
+						"Installed",
+						state.installed
+							.. (state.checked_at and (state.stale and " · check stale" or "") or " · not checked")
 				end
 				local name = clip(state.id, math.max(4, math.min(18, math.floor(width / 3))))
 				local padding = string.rep(" ", math.max(2, 20 - vim.fn.strdisplaywidth(name)))
@@ -178,14 +216,22 @@ function M.render()
 					line({}, state.id)
 					field("Installed", state.installed or "Not managed by CliHub")
 					field(
-						"Available",
+						"Upstream",
 						state.available or "Not checked · press r",
 						state.available and "Installed" or "Muted"
+					)
+					field(
+						"Checked",
+						u.age(state.checked_at) .. (state.stale and " · cached; R refresh" or ""),
+						"Muted"
 					)
 					if state.pin then
 						field("Pinned", state.pin, "Pin")
 					end
 					field("Source", source_label(hub.registry[state.id].source), "Progress")
+					if state.release_url then
+						field("Release", state.release_url .. " · o open", "Progress")
+					end
 					for _, command in ipairs(vim.fn.sort(vim.tbl_keys(state.commands))) do
 						local info = state.commands[command]
 						field(command, info.managed)
@@ -214,12 +260,25 @@ function M.render()
 		line({
 			{
 				view == 2 and "  No managed tools yet. Press 1 to choose your first tool."
-					or "  No known updates. Press R to check installed tools.",
+					or (
+						checked < installed and "  Some installed tools are unchecked. Press R to check updates."
+						or "  No upgrades in saved checks. Press R to refresh."
+					),
 				"Muted",
 			},
 		})
 	end
 	line()
+	line({
+		{ "  i", "Key" },
+		{ " install    ", "Muted" },
+		{ "u", "Key" },
+		{ " install/update    ", "Muted" },
+		{ "r", "Key" },
+		{ " check selected    ", "Muted" },
+		{ "o", "Key" },
+		{ " release notes", "Muted" },
+	})
 	line({
 		{ "  <Tab>", "Key" },
 		{ " switch view    ", "Muted" },
@@ -310,6 +369,15 @@ function M.open()
 			end
 		end, "CliHub " .. action .. " installed")
 	end
+	map("o", function()
+		local id = selected()
+		if id then
+			local ok, err = pcall(require("clihub").open_release, id)
+			if not ok then
+				vim.notify(tostring(err), vim.log.levels.ERROR)
+			end
+		end
+	end, "Open release notes")
 	map("<CR>", function()
 		local id = selected()
 		if id then

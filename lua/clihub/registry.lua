@@ -40,6 +40,7 @@ M.bundled = {
 	}, { k9s = "k9s" }, { asset = "checksums.sha256", format = "gnu" }, { k9s = { "version", "--short" } }),
 	kubectl = {
 		description = "Kubernetes command line",
+		releases = "https://github.com/kubernetes/kubernetes/releases/tag/{tag}",
 		source = { kind = "direct", latest = "https://dl.k8s.io/release/stable.txt" },
 		installer = "artifact",
 		targets = {},
@@ -102,6 +103,9 @@ function M.validate(id, recipe)
 	assert(vim.tbl_contains({ "github", "gitlab", "direct" }, source.kind), id .. ": unsupported source")
 	local function https(url)
 		assert(type(url) == "string" and url:match("^https://") and not url:find("[%c]"), id .. ": HTTPS URL required")
+	end
+	if recipe.releases then
+		https(u.expand(recipe.releases, { tag = "v1.2.3", version = "1.2.3" }))
 	end
 	if source.kind == "github" then
 		assert(

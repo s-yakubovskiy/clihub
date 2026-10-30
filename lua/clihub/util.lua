@@ -54,6 +54,12 @@ function M.canonical(value)
 	return "{" .. table.concat(parts, ",") .. "}"
 end
 
+function M.fingerprint(recipe)
+	local installation = vim.deepcopy(recipe)
+	installation.releases = nil -- Release-page metadata does not change installed artifacts.
+	return vim.fn.sha256(M.canonical(installation))
+end
+
 function M.read(path)
 	local file = assert(io.open(path, "rb"))
 	local data = file:read("*a")
@@ -66,6 +72,64 @@ function M.write(path, data)
 	local ok, err = file:write(data)
 	file:close()
 	assert(ok, err)
+end
+
+function M.atomic_write(path, data)
+	M.mkdir(vim.fs.dirname(path))
+	local temporary = path .. "." .. uv.os_getpid() .. "." .. uv.hrtime()
+	local fd = assert(uv.fs_open(temporary, "wx", 384))
+	local ok, err = pcall(function()
+		assert(uv.fs_write(fd, data, 0) == #data, "Short file write")
+		assert(uv.fs_fsync(fd))
+	end)
+	uv.fs_close(fd)
+	if ok then
+		ok, err = uv.fs_rename(temporary, path)
+	end
+	if not ok then
+		uv.fs_unlink(temporary)
+		error(err)
+	end
+end
+
+function M.json_read(path)
+	local ok, value = pcall(function()
+		return vim.json.decode(M.read(path))
+	end)
+	return ok and type(value) == "table" and value or nil
+end
+
+-- Unknown tag schemes are deliberately unordered, rather than guessed upgrades.
+function M.compare(a, b)
+	if not a or not b then
+		return nil
+	end
+	if a == b then
+		return 0
+	end
+	local function parse(tag)
+		return vim.version.parse(tag:gsub("%+[%w.-]+$", ""), { strict = true })
+	end
+	local left, right = parse(a), parse(b)
+	if not left or not right then
+		return nil
+	end
+	return left == right and 0 or left < right and -1 or 1
+end
+
+function M.age(timestamp)
+	if not timestamp then
+		return "not checked"
+	end
+	local seconds = math.max(0, os.time() - timestamp)
+	if seconds < 60 then
+		return "just now"
+	elseif seconds < 3600 then
+		return math.floor(seconds / 60) .. "m ago"
+	elseif seconds < 86400 then
+		return math.floor(seconds / 3600) .. "h ago"
+	end
+	return math.floor(seconds / 86400) .. "d ago"
 end
 
 function M.mkdir(path)
@@ -123,6 +187,7 @@ function M.run(args, opts)
 		fd = assert(uv.fs_open(opts.output, "w", 384))
 	end
 	local ok, process = pcall(vim.system, args, {
+		stdin = opts.stdin,
 		text = not fd,
 		timeout = opts.timeout or 120000,
 		stdout = fd and function(err, data)
@@ -158,23 +223,25 @@ function M.run(args, opts)
 	assert(not write_error, write_error)
 	assert(
 		result.code == 0,
-		table.concat(args, " ")
-			.. "\n"
-			.. (result.stderr or "")
-			.. "\n"
-			.. (result.stdout or ""):sub(1, 4096)
-			.. "\n(exit "
-			.. result.code
-			.. ")"
+		opts.sensitive and (args[1] .. " request failed (exit " .. result.code .. ")")
+			or (
+				table.concat(args, " ")
+				.. "\n"
+				.. (result.stderr or "")
+				.. "\n"
+				.. (result.stdout or ""):sub(1, 4096)
+				.. "\n(exit "
+				.. result.code
+				.. ")"
+			)
 	)
 	return result.stdout or ""
 end
 
-local function curl(url)
+function M.curl(url, allow_http_errors)
 	assert(type(url) == "string" and url:match("^https://") and not url:find("[%c]"), "Expected an HTTPS URL")
-	return {
+	local args = {
 		"curl",
-		"--fail-with-body",
 		"--silent",
 		"--show-error",
 		"--location",
@@ -193,14 +260,21 @@ local function curl(url)
 		"--url",
 		url,
 	}
+	if not allow_http_errors then
+		args[#args + 1] = "--fail-with-body"
+	end
+	return args
 end
 
-function M.fetch(url)
-	return M.run(curl(url))
+function M.fetch(url, opts)
+	if url:match("^https://api%.github%.com/") then
+		return require("clihub.http").fetch(url, opts)
+	end
+	return M.run(M.curl(url))
 end
 
 function M.download(url, path)
-	local args = curl(url)
+	local args = M.curl(url)
 	vim.list_extend(args, { "--output", path })
 	M.run(args, { timeout = 400000 })
 end

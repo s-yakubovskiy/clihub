@@ -367,7 +367,7 @@ check("explicit update installs absent tools; bulk update only updates installed
 	equal(action("update", {}), {})
 	assert(not install.current(root, "upsertprobe"), "Bulk update installed an absent tool")
 	assert(action("check", { "probe" }).probe.ok)
-	equal(hub.status("probe").available, "v1.0.0")
+	equal(hub.status("probe").available, release_tag)
 	assert(action("update", { "upsertprobe" }).upsertprobe.ok)
 	equal(install.current(root, "upsertprobe").tag, release_tag)
 	process({ root .. "/bin/upsertprobe", "--version" })
@@ -467,6 +467,275 @@ check("UI installs queue in order, ignore repeat presses, and continue after fai
 	vim.api.nvim_del_augroup_by_name("CliHubQueueTest")
 	u.download, vim.notify = saved_download, saved_notify
 	hub.setup({ root = root, path = "none", registry = { probe = recipe } })
+end)
+
+local function operation(kind, ids)
+	local results
+	hub.run(kind, ids, function(value)
+		results = value
+	end)
+	assert(vim.wait(10000, function()
+		return results ~= nil
+	end, 10))
+	return results
+end
+
+check("version comparison orders upgrades, downgrades, prereleases, and ignores build metadata", function()
+	for _, pair in ipairs({ { "v1.10.0", "1.9.0" }, { "1.0.0", "1.0.0-rc.2" }, { "1.0.0-rc.10", "1.0.0-rc.2" } }) do
+		equal(u.compare(pair[1], pair[2]), 1)
+		equal(u.compare(pair[2], pair[1]), -1)
+	end
+	equal(u.compare("v1.2.3+build.1", "1.2.3+build.2"), 0)
+	equal(u.compare("release-2026-10", "nightly-42"), nil)
+	equal(u.compare("nightly-42", "nightly-42"), 0)
+end)
+
+check("checks survive restart, ignore pins, and invalidate changed recipes and corrupt cache", function()
+	local opts = { root = root, path = "none", registry = { probe = recipe }, versions = { probe = "v1.0.0" } }
+	hub.setup(opts)
+	assert(operation("check", { "probe" }).probe.ok)
+	local timestamp = hub.status("probe").checked_at
+	assert(timestamp and hub.available.probe == release_tag)
+	hub.setup(opts)
+	equal(hub.available.probe, release_tag)
+	equal(hub.status("probe").checked_at, timestamp)
+	equal(hub.status("probe").status, "pinned")
+	local path = root .. "/checks/probe.json"
+	local saved = u.read(path)
+	local changed = vim.deepcopy(recipe)
+	changed.description = "new recipe"
+	hub.setup({ root = root, path = "none", registry = { probe = changed } })
+	equal(hub.available.probe, nil)
+	u.write(path, "broken JSON")
+	hub.setup(opts)
+	equal(hub.available.probe, nil)
+	u.write(path, saved)
+	hub.setup(opts)
+end)
+
+check("update preserves a newer installation and rejects unordered release changes", function()
+	local managed = workspace .. "/newer"
+	await(function()
+		install.apply(managed, "probe", recipe, platform, "v9.0.0")
+	end)
+	local before = downloads
+	local result = await(function()
+		return install.apply(managed, "probe", recipe, platform, nil, nil, { only_upgrade = true })
+	end)
+	assert(result.newer_installed and result.unchanged)
+	equal(install.current(managed, "probe").tag, "v9.0.0")
+	equal(downloads, before)
+	local tag = release_tag
+	release_tag = "nightly-42"
+	raises(function()
+		await(function()
+			install.apply(managed, "probe", recipe, platform, nil, nil, { only_upgrade = true })
+		end)
+	end, "Cannot order release tags")
+	release_tag = tag
+	assert(not uv.fs_lstat(managed .. "/.lock"))
+end)
+
+check("lockfiles restore exact tags and hashes, ensure on startup, and reject drift", function()
+	local saved_config = { root = root, path = "none", registry = { probe = recipe } }
+	local managed, lockpath = workspace .. "/locked", workspace .. "/clihub-lock.json"
+	hub.setup({
+		root = managed,
+		path = "none",
+		registry = { probe = recipe },
+		versions = { probe = "v1.0.0" },
+		lockfile = lockpath,
+	})
+	assert(operation("install", { "probe" }).probe.ok)
+	local locked = hub.lock()
+	equal(locked.probe.tag, "v1.0.0")
+	equal(locked.probe.sha256[platform], digest)
+	local file = u.read(lockpath)
+	hub.lock()
+	equal(u.read(lockpath), file)
+	local restored = workspace .. "/restored"
+	hub.setup({ root = restored, path = "none", registry = { probe = recipe }, lockfile = lockpath })
+	local complete
+	hub.restore(function(results)
+		complete = results
+	end)
+	assert(vim.wait(10000, function()
+		return complete ~= nil
+	end, 10))
+	assert(complete.probe.ok, complete.probe.error)
+	equal(install.current(restored, "probe").tag, "v1.0.0")
+	local config = {
+		root = restored,
+		path = "none",
+		registry = { probe = recipe },
+		lockfile = lockpath,
+		ensure_installed = { "probe" },
+	}
+	local before = downloads
+	hub.setup(config)
+	vim.wait(20, function()
+		return false
+	end)
+	equal(downloads, before)
+	config.root = workspace .. "/ensured"
+	hub.setup(config)
+	assert(vim.wait(10000, function()
+		return install.current(config.root, "probe") ~= nil and not hub.busy
+	end, 10))
+	equal(install.current(config.root, "probe").tag, "v1.0.0")
+	local forged = vim.json.decode(file)
+	forged.packages.probe.sha256[platform] = string.rep("0", 64)
+	u.write(lockpath, vim.json.encode(forged))
+	hub.setup({ root = workspace .. "/tampered", path = "none", registry = { probe = recipe }, lockfile = lockpath })
+	complete = nil
+	hub.restore(function(results)
+		complete = results
+	end)
+	assert(vim.wait(10000, function()
+		return complete ~= nil
+	end, 10))
+	assert(not complete.probe.ok and complete.probe.error:find("Lockfile SHA-256 mismatch", 1, true))
+	assert(not install.current(hub.config.root, "probe"))
+	u.write(lockpath, file)
+	local changed = vim.deepcopy(recipe)
+	changed.description = "recipe drift"
+	hub.setup({ root = restored, path = "none", registry = { probe = changed }, lockfile = lockpath })
+	raises(hub.restore, "Recipe changed")
+	hub.setup({
+		root = restored,
+		path = "none",
+		registry = { probe = recipe },
+		versions = { probe = "v9.0.0" },
+		lockfile = lockpath,
+	})
+	raises(hub.restore, "Version pin conflicts")
+	u.write(lockpath, "{")
+	raises(hub.restore, "Invalid CliHub lockfile")
+	hub.setup(saved_config)
+end)
+
+check("release links cover GitHub, GitLab, direct recipes, and browser action", function()
+	equal(sources.release_url(recipe, "v1.0/test"), "https://github.com/example/probe/releases/tag/v1.0%2Ftest")
+	local entry = vim.deepcopy(recipe)
+	entry.source = { kind = "gitlab", api = "https://gitlab.test/api/v4", project = "group/sub/project" }
+	equal(sources.release_url(entry, "v1.0"), "https://gitlab.test/group/sub/project/-/releases/v1.0")
+	entry.source = { kind = "direct", latest = "https://example.test/stable.txt" }
+	equal(sources.release_url(entry, "v1.0"), nil)
+	entry.releases = "https://example.test/releases/{tag}"
+	equal(sources.release_url(entry, "v1.0"), "https://example.test/releases/v1.0")
+	equal(sources.release_url(entry), nil)
+	local linked = vim.deepcopy(recipe)
+	linked.releases = "https://example.test/releases/{tag}"
+	equal(u.fingerprint(linked), u.fingerprint(recipe))
+	local saved, opened = vim.ui.open
+	vim.ui.open = function(url)
+		opened = url
+	end
+	hub.available.probe = "v1.0.0"
+	hub.open_release("probe")
+	equal(opened, "https://github.com/example/probe/releases/tag/v1.0.0")
+	vim.ui.open = saved
+end)
+
+check("GitHub auth is private, cached per credential, revalidates ETags, and explains rate limits", function()
+	local http = require("clihub.http")
+	local saved_run, saved_gh, saved_github = u.run, vim.env.GH_TOKEN, vim.env.GITHUB_TOKEN
+	local calls, gh_calls, code, response_headers = 0, 0, "200", 'ETag: "one"\r\n'
+	local directory = workspace .. "/http"
+	local secret, expected_secret = "dummy-token-for-test", "dummy-token-for-test"
+	local response = vim.json.encode({ tag_name = "v1.0.0" })
+	local saw_etag = false
+	u.run = function(args, opts)
+		if args[1] == "gh" then
+			gh_calls = gh_calls + 1
+			return secret .. "\n"
+		end
+		calls = calls + 1
+		assert(not table.concat(args, " "):find(secret, 1, true), "Token exposed in command arguments")
+		assert(opts.sensitive)
+		if expected_secret then
+			assert(opts.stdin and opts.stdin:find(expected_secret, 1, true))
+		else
+			assert(not opts.stdin)
+		end
+		for i, value in ipairs(args) do
+			if value == "--dump-header" then
+				u.write(args[i + 1], "HTTP/2 " .. code .. "\r\n" .. response_headers .. "\r\n")
+			end
+			if value == "--output" and code ~= "304" then
+				u.write(args[i + 1], response)
+			end
+			if value == 'If-None-Match: "one"' then
+				saw_etag = true
+			end
+		end
+		return code
+	end
+	local url = "https://api.github.com/repos/example/probe/releases/latest"
+	http.setup({ token = secret, use_gh = false }, directory)
+	equal(http.fetch(url), response)
+	equal(http.fetch(url), response)
+	equal(calls, 1)
+	code = "304"
+	equal(http.fetch(url, { refresh = true }), response)
+	assert(saw_etag)
+	equal(calls, 2)
+	for _, path in ipairs(vim.fn.glob(directory .. "/*.json", false, true)) do
+		assert(not u.read(path):find(secret, 1, true), "Token persisted to disk")
+		equal(uv.fs_stat(path).mode % 512, 384)
+	end
+	code, response_headers = "403", "x-ratelimit-remaining: 0\r\nx-ratelimit-reset: 1800000000\r\n"
+	raises(function()
+		http.fetch(url, { refresh = true })
+	end, "GitHub API rate limit exceeded")
+	code, response_headers = "401", ""
+	raises(function()
+		http.fetch(url, { refresh = true })
+	end, "credentials rejected")
+	raises(function()
+		http.fetch("https://other.test/releases/latest")
+	end, "restricted to api.github.com")
+	code = "200"
+	vim.env.GH_TOKEN, vim.env.GITHUB_TOKEN = nil, nil
+	http.setup({ use_gh = true }, directory .. "/gh")
+	if vim.fn.executable("gh") == 1 then
+		http.fetch(url)
+		equal(gh_calls, 1)
+	end
+	vim.env.GH_TOKEN = "environment-test-token"
+	expected_secret = vim.env.GH_TOKEN
+	http.setup({
+		token = function()
+			return nil
+		end,
+		use_gh = false,
+	}, directory)
+	http.fetch(url)
+	equal(calls, vim.fn.executable("gh") == 1 and 6 or 5)
+	http.setup({ token = "different-token", use_gh = false }, directory)
+	expected_secret = "different-token"
+	http.fetch(url)
+	local before = calls
+	local cached_path = directory .. "/" .. vim.fn.sha256(url .. "\ndifferent-token") .. ".json"
+	local cached = u.json_read(cached_path)
+	cached.body = "broken JSON"
+	u.write(cached_path, vim.json.encode(cached))
+	http.fetch(url)
+	equal(calls, before + 1)
+	cached = u.json_read(cached_path)
+	cached.time = os.time() - 600
+	u.write(cached_path, vim.json.encode(cached))
+	http.fetch(url)
+	equal(calls, before + 2)
+	u.run, vim.env.GH_TOKEN, vim.env.GITHUB_TOKEN = saved_run, saved_gh, saved_github
+	local success, failure = pcall(function()
+		await(function()
+			return u.run({ "sh", "-c", "printf dummy-token-for-test; exit 1" }, { sensitive = true })
+		end)
+	end)
+	assert(not success and tostring(failure):find("request failed", 1, true))
+	assert(not tostring(failure):find("dummy-token-for-test", 1, true), "Sensitive output leaked through errors")
+	http.setup({ use_gh = false }, workspace .. "/http-finished")
 end)
 
 check("raw binary source installs with a raw checksum", function()
