@@ -17,6 +17,13 @@ local function github(repo, assets, bins, checksum, verify)
 end
 
 M.bundled = {
+	gh = github("cli/cli", {
+		amd64 = "gh_{version}_linux_amd64.tar.gz",
+		arm64 = "gh_{version}_linux_arm64.tar.gz",
+	}, {
+		amd64 = { gh = "gh_{version}_linux_amd64/bin/gh" },
+		arm64 = { gh = "gh_{version}_linux_arm64/bin/gh" },
+	}, { asset = "gh_{version}_checksums.txt", format = "gnu" }, { gh = { "--version" } }),
 	rg = github("BurntSushi/ripgrep", {
 		amd64 = "ripgrep-{version}-x86_64-unknown-linux-musl.tar.gz",
 		arm64 = "ripgrep-{version}-aarch64-unknown-linux-musl.tar.gz",
@@ -71,6 +78,7 @@ M.bundled = {
 }
 
 for id, description in pairs({
+	gh = "GitHub command line",
 	rg = "Search file contents, fast",
 	grpcurl = "Call gRPC services from your terminal",
 	k9s = "Explore and manage Kubernetes clusters",

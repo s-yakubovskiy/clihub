@@ -2,7 +2,7 @@
 
 A small Neovim registry and installer for user-managed CLI tools. Commands installed by clihub can be used from Neovim and ordinary terminals.
 
-Requires Neovim 0.10+, Linux x86_64 or arm64, curl 7.76+, GNU tar, and sha256sum. No Lua dependencies. Current recipes: `kubectl`, `rg`, `grpcurl`, `k9s`, `glab`, `uv` (also exports `uvx`), and `fastfetch`.
+Requires Neovim 0.10+, Linux x86_64 or arm64, curl 7.76+, GNU tar, and sha256sum. No Lua dependencies. Current recipes: `kubectl`, `rg`, `grpcurl`, `k9s`, `gh`, `glab`, `uv` (also exports `uvx`), and `fastfetch`.
 
 ## Setup
 
