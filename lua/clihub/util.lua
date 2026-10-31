@@ -19,7 +19,7 @@ end
 
 function M.platform()
 	local system = uv.os_uname()
-	assert(system.sysname == "Linux", "CliHub currently supports Linux only")
+	assert(system.sysname == "Linux", "clihub currently supports Linux only")
 	local arch = ({ x86_64 = "amd64", amd64 = "amd64", aarch64 = "arm64", arm64 = "arm64" })[system.machine]
 	assert(arch, "Unsupported architecture: " .. system.machine)
 	return "linux-" .. arch
@@ -181,7 +181,7 @@ end
 function M.run(args, opts)
 	opts = opts or {}
 	local thread = coroutine.running()
-	assert(thread, "CliHub processes must run inside an async operation")
+	assert(thread, "clihub processes must run inside an async operation")
 	local fd, output_error
 	if opts.output then
 		fd = assert(uv.fs_open(opts.output, "w", 384))

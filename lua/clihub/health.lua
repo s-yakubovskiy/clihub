@@ -4,7 +4,7 @@ function M.check()
 	local health = vim.health
 	local hub = require("clihub")
 	local config = hub.ensure()
-	health.start("CliHub")
+	health.start("clihub")
 	for _, command in ipairs({ "curl", "tar", "sha256sum" }) do
 		if vim.fn.executable(command) == 1 then
 			health.ok(command .. ": " .. vim.fn.exepath(command))

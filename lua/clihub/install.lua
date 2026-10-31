@@ -56,21 +56,21 @@ function M.lock(root)
 	local ok, err = uv.fs_mkdir(directory, 448)
 	if not ok then
 		local stat = uv.fs_lstat(directory)
-		assert(stat and stat.type == "directory", err or "Invalid CliHub lock")
+		assert(stat and stat.type == "directory", err or "Invalid clihub lock")
 		local scan = assert(uv.fs_scandir(directory))
 		local name = uv.fs_scandir_next(scan)
 		assert(
 			name and name:match("^owner%.%d+%.%x+%.json$") and not uv.fs_scandir_next(scan),
-			"CliHub is busy: lock owner is being initialized or is ambiguous"
+			"clihub is busy: lock owner is being initialized or is ambiguous"
 		)
 		local owner = vim.json.decode(u.read(directory .. "/" .. name))
-		assert(type(owner.pid) == "number" and owner.pid > 0, "Invalid CliHub lock owner")
+		assert(type(owner.pid) == "number" and owner.pid > 0, "Invalid clihub lock owner")
 		local alive, kill_err = uv.kill(owner.pid, 0)
-		assert(not alive and tostring(kill_err):find("ESRCH", 1, true), "CliHub is busy (PID " .. owner.pid .. ")")
+		assert(not alive and tostring(kill_err):find("ESRCH", 1, true), "clihub is busy (PID " .. owner.pid .. ")")
 		-- Only the stale owner's unique file can be removed; a contender cannot unlink a replacement lock.
-		assert(uv.fs_unlink(directory .. "/" .. name), "CliHub lock changed; retry the operation")
-		assert(uv.fs_rmdir(directory), "CliHub lock changed; retry the operation")
-		assert(uv.fs_mkdir(directory, 448), "CliHub is busy")
+		assert(uv.fs_unlink(directory .. "/" .. name), "clihub lock changed; retry the operation")
+		assert(uv.fs_rmdir(directory), "clihub lock changed; retry the operation")
+		assert(uv.fs_mkdir(directory, 448), "clihub is busy")
 	end
 	local name = "owner." .. token() .. ".json"
 	local wrote, write_err = pcall(u.write, directory .. "/" .. name, vim.json.encode({ pid = uv.os_getpid() }))

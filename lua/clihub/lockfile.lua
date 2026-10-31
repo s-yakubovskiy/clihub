@@ -6,7 +6,7 @@ function M.read(path, registry)
 		return {}
 	end
 	local data = u.json_read(path)
-	assert(data and data.version == 1 and type(data.packages) == "table", "Invalid CliHub lockfile: " .. path)
+	assert(data and data.version == 1 and type(data.packages) == "table", "Invalid clihub lockfile: " .. path)
 	for id, item in pairs(data.packages) do
 		local recipe = registry[id]
 		assert(recipe, "Lockfile references unknown tool: " .. tostring(id))

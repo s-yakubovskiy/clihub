@@ -19,11 +19,11 @@ local function remember_check(id, tag)
 end
 
 function M.setup(opts)
-	assert(not M.busy, "Cannot reconfigure CliHub during an operation")
+	assert(not M.busy, "Cannot reconfigure clihub during an operation")
 	opts = opts or {}
 	local root = opts.root or ((vim.env.XDG_DATA_HOME or (vim.env.HOME .. "/.local/share")) .. "/clihub")
 	root = vim.fs.normalize(vim.fn.fnamemodify(vim.fn.expand(root), ":p")):gsub("/$", "")
-	assert(root ~= "" and root ~= vim.env.HOME, "Choose a dedicated CliHub root")
+	assert(root ~= "" and root ~= vim.env.HOME, "Choose a dedicated clihub root")
 	assert(opts.path == nil or opts.path == "prepend" or opts.path == "none", "path must be 'prepend' or 'none'")
 	M.config = {
 		root = root,
@@ -227,7 +227,7 @@ local function execute(action, ids, done, platform, locked)
 			end
 			vim.notify(
 				#failures > 0 and table.concat(failures, "\n")
-					or ("CliHub " .. action .. " completed (" .. #ids .. " tools)"),
+					or ("clihub " .. action .. " completed (" .. #ids .. " tools)"),
 				#failures > 0 and vim.log.levels.ERROR or vim.log.levels.INFO
 			)
 		end
@@ -239,7 +239,7 @@ function M.run(action, ids, done, opts)
 	M.ensure()
 	assert(
 		vim.tbl_contains({ "install", "update", "check", "remove" }, action),
-		"Unknown CliHub action: " .. tostring(action)
+		"Unknown clihub action: " .. tostring(action)
 	)
 	ids = vim.deepcopy(ids or {})
 	local bulk = #ids == 0
@@ -282,7 +282,7 @@ end
 local function locked_tools(required)
 	local entries = require("clihub.lockfile").read(M.config.lockfile, M.registry)
 	if required then
-		assert(next(entries), "No locked tools in " .. M.config.lockfile .. "; run :CliHub lock first")
+		assert(next(entries), "No locked tools in " .. M.config.lockfile .. "; run :clihub lock first")
 	end
 	for id, entry in pairs(entries) do
 		assert(

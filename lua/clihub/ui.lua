@@ -131,7 +131,7 @@ function M.render()
 			updates = updates + 1
 		end
 	end
-	centered(" CliHub ", "Title")
+	centered(" clihub ", "Title")
 	centered(
 		installed
 			.. " installed · "
@@ -214,7 +214,7 @@ function M.render()
 						}, state.id)
 					end
 					line({}, state.id)
-					field("Installed", state.installed or "Not managed by CliHub")
+					field("Installed", state.installed or "Not managed by clihub")
 					field(
 						"Upstream",
 						state.available or "Not checked · press r",
@@ -359,7 +359,7 @@ function M.open()
 			if not ok then
 				vim.notify(tostring(err), vim.log.levels.ERROR)
 			end
-		end, "CliHub " .. action)
+		end, "clihub " .. action)
 	end
 	for key, action in pairs({ U = "update", R = "check" }) do
 		map(key, function()
@@ -367,7 +367,7 @@ function M.open()
 			if not ok then
 				vim.notify(tostring(err), vim.log.levels.ERROR)
 			end
-		end, "CliHub " .. action .. " installed")
+		end, "clihub " .. action .. " installed")
 	end
 	map("o", function()
 		local id = selected()
@@ -388,7 +388,7 @@ function M.open()
 	for index = 1, 3 do
 		map(tostring(index), function()
 			change_view(index)
-		end, "CliHub view " .. index)
+		end, "clihub view " .. index)
 	end
 	map("<Tab>", function()
 		change_view(view + 1)
@@ -411,8 +411,8 @@ function M.open()
 			vim.api.nvim_win_close(window, true)
 		end
 	end
-	map("q", close, "Close CliHub")
-	map("<Esc>", close, "Close CliHub")
+	map("q", close, "Close clihub")
+	map("<Esc>", close, "Close clihub")
 	local group = vim.api.nvim_create_augroup("CliHubUI", { clear = true })
 	vim.api.nvim_create_autocmd("User", { group = group, pattern = "CliHubChanged", callback = M.render })
 	vim.api.nvim_create_autocmd("ColorScheme", {

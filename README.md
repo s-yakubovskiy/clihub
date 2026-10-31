@@ -1,6 +1,6 @@
-# CliHub
+# clihub
 
-A small Neovim registry and installer for user-managed CLI tools. Commands installed by CliHub can be used from Neovim and ordinary terminals.
+A small Neovim registry and installer for user-managed CLI tools. Commands installed by clihub can be used from Neovim and ordinary terminals.
 
 Requires Neovim 0.10+, Linux x86_64 or arm64, curl 7.76+, GNU tar, and sha256sum. No Lua dependencies. Current recipes: `kubectl`, `rg`, `grpcurl`, `k9s`, `glab`, `uv` (also exports `uvx`), and `fastfetch`.
 
@@ -16,15 +16,23 @@ With lazy.nvim:
 }
 ```
 
-CliHub prepends its managed bin directory to Neovim's PATH. To use the tools in ordinary shells, add this line to your shell configuration:
+clihub prepends its managed bin directory to Neovim's PATH. To use the tools in ordinary shells, add this line to your shell configuration:
 
 ```sh
 export PATH="${XDG_DATA_HOME:-$HOME/.local/share}/clihub/bin:$PATH"
 ```
 
-Opening Neovim or CliHub does not install or update tools automatically unless you configure `ensure_installed`. Existing installations remain external to CliHub; reinstall selected tools into the dedicated root, verify them, then retire previous copies if desired.
+Opening Neovim or clihub does not install or update tools automatically unless you configure `ensure_installed`. Existing installations remain external to clihub; reinstall selected tools into the dedicated root, verify them, then retire previous copies if desired.
 
 ## Use
+
+The displayed name is `clihub`. The command is `:CliHub` because Neovim requires user-defined commands to start with an uppercase letter. To type it in lowercase interactively, add this abbreviation to your Neovim config:
+
+```lua
+vim.cmd([[cnoreabbrev <expr> clihub getcmdtype() == ':' && getcmdline() ==# 'clihub' ? 'CliHub' : 'clihub']])
+```
+
+The abbreviation expands when you press Space or Enter; scripts and mappings should continue using `:CliHub`.
 
 ```vim
 :CliHub
@@ -43,7 +51,7 @@ The centered, theme-aware window groups tools by status. Use `1` / `2` / `3` or 
 
 Select another tool and press `i` while an install runs to queue it. Queued requests run in order and appear under In progress. Repeated actions on an active or queued tool are ignored in the UI. Closing the window keeps the queue running while Neovim stays open.
 
-`u` (or `:CliHub update <id>`) installs a tool if absent and updates it if already installed. `U` updates all CliHub installations, skipping pinned tools; it does not install absent registry entries. `check` and `update` without names operate on CliHub installations. Removal asks for confirmation in the UI/command; the Lua API is intended for automation and does not prompt.
+`u` (or `:CliHub update <id>`) installs a tool if absent and updates it if already installed. `U` updates all clihub installations, skipping pinned tools; it does not install absent registry entries. `check` and `update` without names operate on clihub installations. Removal asks for confirmation in the UI/command; the Lua API is intended for automation and does not prompt.
 
 Checks discover upstream releases independently of pins. Their versions and timestamps persist under the managed root, survive restarting Neovim, and are invalidated when a recipe changes. Details show the check age; checks older than 24 hours are marked stale. Opening the UI never fetches automatically: press `R` to refresh.
 

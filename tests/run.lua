@@ -610,7 +610,7 @@ check("lockfiles restore exact tags and hashes, ensure on startup, and reject dr
 	})
 	raises(hub.restore, "Version pin conflicts")
 	u.write(lockpath, "{")
-	raises(hub.restore, "Invalid CliHub lockfile")
+	raises(hub.restore, "Invalid clihub lockfile")
 	hub.setup(saved_config)
 end)
 
@@ -814,7 +814,7 @@ check("command registration and UI work without network or installation", functi
 	assert(vim.fn.exists(":CliHub") == 2)
 	vim.cmd("CliHub")
 	equal(vim.bo.filetype, "clihub")
-	assert(vim.api.nvim_buf_get_lines(0, 0, 1, false)[1]:find("CliHub", 1, true))
+	assert(vim.api.nvim_buf_get_lines(0, 0, 1, false)[1]:find("clihub", 1, true))
 	equal(hub.complete("in", "CliHub in"), { "install" })
 	assert(vim.tbl_contains(hub.complete("", "CliHub install "), "probe"))
 end)
