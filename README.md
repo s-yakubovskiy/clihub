@@ -117,6 +117,8 @@ Startup and `:CliHub ensure` install missing tools and reconcile locked or pinne
 
 Release API authentication uses `github.token` (a string or callback), then `GH_TOKEN`, `GITHUB_TOKEN`, or an existing `gh auth login` session. `gh` is optional; set `github.use_gh = false` to disable its lookup. Prefer an environment variable or callback over putting a token in config. Tokens are sent through curl's standard input, never command arguments, logs, or cache files, and only to `api.github.com`.
 
+After checking a GitHub tool, run `:checkhealth clihub` to see the credential source (`github.token`, `GH_TOKEN`, `GITHUB_TOKEN`, `gh auth token`, or unauthenticated) and the last HTTP response status. Before the first GitHub operation it reports that authentication is unresolved. Health checks do not fetch credentials or print token values. The same safe metadata is available through `require("clihub.http").auth_status()`.
+
 Successful GitHub release responses are cached per credential under the managed root for five minutes by default. Explicit checks always revalidate with ETags; HTTP 304 responses reuse the cached body. Rate-limit failures explain how to authenticate and show the reset time when provided. Private release asset downloads and GitLab authentication are not supported yet.
 
 Supported payloads are standalone ELF binaries and tar.gz archives containing standalone binaries. Members are selected by exact path, validated for CPU architecture, checksum-verified, and tested before activation. Multiple commands share one package version. Full application bundles, other operating systems, and package-manager/toolchain installs are future work.

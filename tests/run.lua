@@ -673,7 +673,9 @@ check("GitHub auth is private, cached per credential, revalidates ETags, and exp
 	end
 	local url = "https://api.github.com/repos/example/probe/releases/latest"
 	http.setup({ token = secret, use_gh = false }, directory)
+	assert(not http.auth_status().resolved)
 	equal(http.fetch(url), response)
+	equal(http.auth_status(), { resolved = true, authenticated = true, source = "github.token", last_status = 200 })
 	equal(http.fetch(url), response)
 	equal(calls, 1)
 	code = "304"
@@ -701,6 +703,7 @@ check("GitHub auth is private, cached per credential, revalidates ETags, and exp
 	if vim.fn.executable("gh") == 1 then
 		http.fetch(url)
 		equal(gh_calls, 1)
+		equal(http.auth_status().source, "gh auth token")
 	end
 	vim.env.GH_TOKEN = "environment-test-token"
 	expected_secret = vim.env.GH_TOKEN
@@ -711,6 +714,7 @@ check("GitHub auth is private, cached per credential, revalidates ETags, and exp
 		use_gh = false,
 	}, directory)
 	http.fetch(url)
+	equal(http.auth_status().source, "GH_TOKEN")
 	equal(calls, vim.fn.executable("gh") == 1 and 6 or 5)
 	http.setup({ token = "different-token", use_gh = false }, directory)
 	expected_secret = "different-token"
@@ -727,6 +731,21 @@ check("GitHub auth is private, cached per credential, revalidates ETags, and exp
 	u.write(cached_path, vim.json.encode(cached))
 	http.fetch(url)
 	equal(calls, before + 2)
+	local saved_health, messages = vim.health, {}
+	local function report(message)
+		messages[#messages + 1] = message
+	end
+	vim.health = { start = report, info = report, ok = report, warn = report, error = report }
+	require("clihub.health").check()
+	vim.health = saved_health
+	assert(table.concat(messages, "\n"):find("GitHub credential source: github.token", 1, true))
+	assert(not table.concat(messages, "\n"):find(expected_secret, 1, true), "Health check exposed the token")
+	equal(calls, before + 2)
+	vim.env.GH_TOKEN, vim.env.GITHUB_TOKEN = nil, nil
+	expected_secret = nil
+	http.setup({ use_gh = false }, directory .. "/anonymous")
+	http.fetch(url)
+	equal(http.auth_status(), { resolved = true, authenticated = false, source = "anonymous", last_status = 200 })
 	u.run, vim.env.GH_TOKEN, vim.env.GITHUB_TOKEN = saved_run, saved_gh, saved_github
 	local success, failure = pcall(function()
 		await(function()

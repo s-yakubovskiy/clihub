@@ -19,6 +19,19 @@ function M.check()
 		health.error(tostring(platform))
 	end
 	health.info("Root: " .. config.root)
+	local auth = require("clihub.http").auth_status()
+	if not auth.resolved then
+		health.info("GitHub authentication not resolved yet; check a GitHub tool with r or :CliHub check rg")
+	elseif not auth.authenticated then
+		health.warn("GitHub requests are unauthenticated")
+	elseif auth.last_status == 401 then
+		health.error("GitHub credentials rejected (source: " .. auth.source .. ")")
+	else
+		health.info("GitHub credential source: " .. auth.source)
+	end
+	if auth.last_status then
+		health.info("Last GitHub API response: HTTP " .. auth.last_status)
+	end
 	local stat = vim.uv.fs_lstat(config.root)
 	if not stat then
 		health.info("Root will be created on first installation")

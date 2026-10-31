@@ -1,6 +1,7 @@
 local u = require("clihub.util")
 local M = {}
 local config, token, token_loaded = {}, nil, false
+local token_source, last_status
 
 function M.setup(opts, directory)
 	config = vim.tbl_extend("force", { use_gh = true, cache_ttl = 300 }, opts or {})
@@ -11,6 +12,17 @@ function M.setup(opts, directory)
 	)
 	config.directory = directory
 	token, token_loaded = nil, false
+	token_source, last_status = nil, nil
+end
+
+-- Report provenance without exposing credentials or resolving them as a side effect.
+function M.auth_status()
+	return {
+		resolved = token_loaded,
+		authenticated = token_loaded and token ~= nil,
+		source = token_source,
+		last_status = last_status,
+	}
 end
 
 local function credentials()
@@ -22,11 +34,14 @@ local function credentials()
 		else
 			token = config.token
 		end
+		token_source = "github.token"
 		if not token or token == "" then
 			token = vim.env.GH_TOKEN
+			token_source = "GH_TOKEN"
 		end
 		if not token or token == "" then
 			token = vim.env.GITHUB_TOKEN
+			token_source = "GITHUB_TOKEN"
 		end
 		if (not token or token == "") and config.use_gh and vim.fn.executable("gh") == 1 then
 			local ok, result = pcall(
@@ -35,10 +50,14 @@ local function credentials()
 				{ sensitive = true, timeout = 5000 }
 			)
 			token = ok and vim.trim(result) or nil
+			token_source = "gh auth token"
 		end
 		assert(not token or (type(token) == "string" and not token:find("[%c]")), "Invalid GitHub token")
 		if token == "" then
 			token = nil
+		end
+		if not token then
+			token_source = "anonymous"
 		end
 		token_loaded = true
 	end
@@ -83,6 +102,7 @@ function M.fetch(url, opts)
 			stdin = 'header = "Authorization: Bearer ' .. secret:gsub("\\", "\\\\"):gsub('"', '\\"') .. '"\n'
 		end
 		local status = tonumber(u.run(args, { stdin = stdin, sensitive = true }))
+		last_status = status
 		local headers = {}
 		for line in u.read(headers_path):gmatch("[^\r\n]+") do
 			if line:match("^HTTP/") then
