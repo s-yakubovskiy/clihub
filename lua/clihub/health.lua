@@ -19,17 +19,31 @@ function M.check()
 		health.error(tostring(platform))
 	end
 	health.info("Root: " .. config.root)
-	local auth = require("clihub.http").auth_status()
-	if not auth.resolved then
-		health.info("GitHub authentication not resolved yet; check a GitHub tool with r or :CliHub check rg")
+	local auth, auth_error, finished
+	require("clihub.util").async(function()
+		return require("clihub.http").resolve_auth()
+	end, function(ok, result)
+		if ok then
+			auth = result
+		else
+			auth_error = result
+		end
+		finished = true
+	end)
+	if not vim.wait(6000, function()
+		return finished
+	end, 10) then
+		health.warn("GitHub credential lookup timed out")
+	elseif auth_error then
+		health.error("GitHub credential lookup failed: " .. tostring(auth_error))
 	elseif not auth.authenticated then
-		health.warn("GitHub requests are unauthenticated")
+		health.warn("GitHub requests are unauthenticated; run gh auth login or set GH_TOKEN")
 	elseif auth.last_status == 401 then
 		health.error("GitHub credentials rejected (source: " .. auth.source .. ")")
 	else
 		health.info("GitHub credential source: " .. auth.source)
 	end
-	if auth.last_status then
+	if auth and auth.last_status then
 		health.info("Last GitHub API response: HTTP " .. auth.last_status)
 	end
 	local stat = vim.uv.fs_lstat(config.root)

@@ -64,6 +64,11 @@ local function credentials()
 	return token
 end
 
+function M.resolve_auth()
+	credentials()
+	return M.auth_status()
+end
+
 function M.fetch(url, opts)
 	assert(url:match("^https://api%.github%.com/"), "GitHub authentication is restricted to api.github.com")
 	if not config.directory then

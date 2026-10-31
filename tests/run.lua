@@ -731,6 +731,8 @@ check("GitHub auth is private, cached per credential, revalidates ETags, and exp
 	u.write(cached_path, vim.json.encode(cached))
 	http.fetch(url)
 	equal(calls, before + 2)
+	http.setup({ token = "different-token", use_gh = false }, directory)
+	assert(not http.auth_status().resolved)
 	local saved_health, messages = vim.health, {}
 	local function report(message)
 		messages[#messages + 1] = message
@@ -740,9 +742,22 @@ check("GitHub auth is private, cached per credential, revalidates ETags, and exp
 	vim.health = saved_health
 	assert(table.concat(messages, "\n"):find("GitHub credential source: github.token", 1, true))
 	assert(not table.concat(messages, "\n"):find(expected_secret, 1, true), "Health check exposed the token")
+	equal(http.auth_status(), { resolved = true, authenticated = true, source = "github.token" })
 	equal(calls, before + 2)
 	vim.env.GH_TOKEN, vim.env.GITHUB_TOKEN = nil, nil
 	expected_secret = nil
+	http.setup({ use_gh = false }, directory .. "/anonymous")
+	vim.health = { start = report, info = report, ok = report, warn = report, error = report }
+	require("clihub.health").check()
+	if vim.fn.executable("gh") == 1 then
+		local lookups = gh_calls
+		http.setup({ use_gh = true }, directory .. "/health-gh")
+		require("clihub.health").check()
+		equal(http.auth_status().source, "gh auth token")
+		equal(gh_calls, lookups + 1)
+	end
+	vim.health = saved_health
+	equal(calls, before + 2)
 	http.setup({ use_gh = false }, directory .. "/anonymous")
 	http.fetch(url)
 	equal(http.auth_status(), { resolved = true, authenticated = false, source = "anonymous", last_status = 200 })
