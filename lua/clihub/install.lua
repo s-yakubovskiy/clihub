@@ -132,6 +132,17 @@ local function activate(package, target)
 end
 
 local function intact(root, id, receipt, target)
+	if receipt.installer == "uv" then
+		local environment = package_path(root, id) .. "/" .. target
+		local ok, requirements = pcall(u.read, environment .. "/requirements.txt")
+		if
+			not ok
+			or vim.fn.sha256(requirements) ~= receipt.sha256
+			or vim.fn.executable(environment .. "/bin/python") ~= 1
+		then
+			return false
+		end
+	end
 	for command in pairs(receipt.bins) do
 		local binary = package_path(root, id) .. "/" .. target .. "/bin/" .. command
 		local stat = uv.fs_lstat(binary)
@@ -149,7 +160,11 @@ function M.apply(root, id, recipe, platform, pin, progress, opts)
 	local unlock = M.lock(root)
 	local stage
 	local ok, result = xpcall(function()
-		M.check_exports(root, id, assert(recipe.targets[platform], "Unsupported platform").bins)
+		M.check_exports(
+			root,
+			id,
+			assert(require("clihub.registry").target(recipe, platform), "Unsupported platform").bins
+		)
 		progress("resolving")
 		local resolved = require("clihub.sources").resolve(id, recipe, platform, pin)
 		local current, old_target = M.current(root, id)
@@ -183,43 +198,48 @@ function M.apply(root, id, recipe, platform, pin, progress, opts)
 		end
 		stage = root .. "/staging/" .. token()
 		u.mkdir(stage)
-		progress("downloading " .. resolved.tag)
-		local archive = stage .. "/artifact"
-		u.download(resolved.url, archive)
-		progress("verifying checksum")
-		local checksum = resolved.checksum
-		local expected = checksum.digest or u.checksum(u.fetch(checksum.url), checksum.format, checksum.filename)
-		local actual = u.run({ "sha256sum", "--", archive }):match("^(%x+)")
-		assert(actual and actual:lower() == expected:lower(), "SHA-256 mismatch for " .. id)
-		assert(
-			not opts.locked or actual:lower() == opts.locked.sha256[platform]:lower(),
-			"Lockfile SHA-256 mismatch for " .. id
-		)
 		local payload = stage .. "/payload"
-		u.mkdir(payload)
-		u.mkdir(payload .. "/bin")
-		local members = {}
-		if resolved.format == "tar.gz" then
-			for member in u.run({ "tar", "-tzf", archive }):gmatch("[^\r\n]+") do
-				members[member] = (members[member] or 0) + 1
+		local actual, requirements
+		if recipe.installer == "uv" then
+			actual, requirements = require("clihub.python").prepare(root, resolved, payload, progress, opts.locked)
+		else
+			progress("downloading " .. resolved.tag)
+			local archive = stage .. "/artifact"
+			u.download(resolved.url, archive)
+			progress("verifying checksum")
+			local checksum = resolved.checksum
+			local expected = checksum.digest or u.checksum(u.fetch(checksum.url), checksum.format, checksum.filename)
+			actual = u.run({ "sha256sum", "--", archive }):match("^(%x+)")
+			assert(actual and actual:lower() == expected:lower(), "SHA-256 mismatch for " .. id)
+			assert(
+				not opts.locked or actual:lower() == opts.locked.sha256[platform]:lower(),
+				"Lockfile SHA-256 mismatch for " .. id
+			)
+			u.mkdir(payload)
+			u.mkdir(payload .. "/bin")
+			local members = {}
+			if resolved.format == "tar.gz" then
+				for member in u.run({ "tar", "-tzf", archive }):gmatch("[^\r\n]+") do
+					members[member] = (members[member] or 0) + 1
+				end
 			end
-		end
-		for command, member in pairs(resolved.bins) do
-			progress("preparing " .. command)
-			local destination = payload .. "/bin/" .. command
-			if resolved.format == "binary" then
-				assert(uv.fs_copyfile(archive, destination))
-			else
-				assert(members[member] == 1, "Missing or duplicate archive member: " .. member)
-				local listing = u.run({ "tar", "-tvzf", archive, "--no-wildcards", "--", member })
-				assert(listing:sub(1, 1) == "-", "Archive member is not a regular file: " .. member)
-				u.run({ "tar", "-xOzf", archive, "--no-wildcards", "--", member }, { output = destination })
+			for command, member in pairs(resolved.bins) do
+				progress("preparing " .. command)
+				local destination = payload .. "/bin/" .. command
+				if resolved.format == "binary" then
+					assert(uv.fs_copyfile(archive, destination))
+				else
+					assert(members[member] == 1, "Missing or duplicate archive member: " .. member)
+					local listing = u.run({ "tar", "-tvzf", archive, "--no-wildcards", "--", member })
+					assert(listing:sub(1, 1) == "-", "Archive member is not a regular file: " .. member)
+					u.run({ "tar", "-xOzf", archive, "--no-wildcards", "--", member }, { output = destination })
+				end
+				u.elf(destination, platform)
+				assert(uv.fs_chmod(destination, 493))
+				local args = { destination }
+				vim.list_extend(args, resolved.verify[command])
+				u.run(args, { timeout = 10000 })
 			end
-			u.elf(destination, platform)
-			assert(uv.fs_chmod(destination, 493))
-			local args = { destination }
-			vim.list_extend(args, resolved.verify[command])
-			u.run(args, { timeout = 10000 })
 		end
 		local receipt = {
 			id = id,
@@ -230,7 +250,8 @@ function M.apply(root, id, recipe, platform, pin, progress, opts)
 			sha256 = actual,
 			fingerprint = resolved.fingerprint,
 			bins = resolved.bins,
-			installer = "artifact",
+			installer = recipe.installer,
+			requirements = requirements,
 			installed_at = os.date("!%Y-%m-%dT%H:%M:%SZ"),
 		}
 		u.write(payload .. "/receipt.json", vim.json.encode(receipt))
@@ -245,6 +266,14 @@ function M.apply(root, id, recipe, platform, pin, progress, opts)
 			u.delete(package .. "/" .. target)
 		end
 		assert(uv.fs_rename(payload, package .. "/" .. target))
+		if recipe.installer == "uv" then
+			-- Check that entry points still work after moving the environment.
+			for command in pairs(resolved.bins) do
+				local args = { package .. "/" .. target .. "/bin/" .. command }
+				vim.list_extend(args, resolved.verify[command])
+				u.run(args, { timeout = 10000 })
+			end
+		end
 		M.check_exports(root, id, resolved.bins)
 		progress("activating " .. resolved.tag)
 		activate(package, target)

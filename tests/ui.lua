@@ -71,6 +71,14 @@ assert(text():find("rg", 1, true) and not text():find("pinned", 1, true), "Updat
 assert(not text():find("fastfetch", 1, true), "Newer installation appeared as an upgrade")
 press("<Tab>")
 assert(text():find("localtool", 1, true), "Tab did not cycle to All")
+for row, line in ipairs(vim.api.nvim_buf_get_lines(buf, 0, -1, false)) do
+	if line:find("pgcli", 1, true) then
+		vim.api.nvim_win_set_cursor(win, { row, 0 })
+		break
+	end
+end
+press("<CR>")
+assert(text():find("pypi.org/project/pgcli · uv", 1, true), "Python source details missing")
 vim.o.columns, vim.o.lines = 46, 18
 vim.api.nvim_exec_autocmds("VimResized", {})
 config = vim.api.nvim_win_get_config(win)

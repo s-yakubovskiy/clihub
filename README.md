@@ -2,7 +2,7 @@
 
 A small Neovim registry and installer for user-managed CLI tools. Commands installed by clihub can be used from Neovim and ordinary terminals.
 
-Requires Neovim 0.10+, Linux x86_64 or arm64, curl 7.76+, GNU tar, and sha256sum. No Lua dependencies. Current recipes: `kubectl`, `rg`, `grpcurl`, `k9s`, `gh`, `glab`, `uv` (also exports `uvx`), and `fastfetch`.
+Requires Neovim 0.10+, Linux x86_64 or arm64, curl 7.76+, GNU tar, and sha256sum. No Lua dependencies. Current recipes: `kubectl`, `rg`, `grpcurl`, `k9s`, `gh`, `glab`, `uv` (also exports `uvx`), `fastfetch`, and `pgcli`. Python tools additionally require uv and an installed Python 3.10+.
 
 ## Setup
 
@@ -71,7 +71,7 @@ require("clihub").setup({
 })
 ```
 
-Each registry entry describes a GitHub/GitLab release or direct download, explicit platform-specific asset names, checksum information, exported binary paths, and harmless version-check arguments. New tools using existing formats require only a registry entry. See [DESIGN.md](DESIGN.md) for a complete example and source contracts, and [registry.lua](lua/clihub/registry.lua) for the working recipes.
+Each registry entry describes a GitHub/GitLab release, direct download, or PyPI package, exported commands, and harmless version-check arguments. Binary recipes specify platform-specific assets and checksums; Python recipes use the uv backend described below. New tools using existing formats require only a registry entry. See [registry.lua](lua/clihub/registry.lua) for the working recipes.
 
 GitHub and GitLab release pages are derived from the source. Direct recipes can add `releases = "https://example.org/releases/{tag}"` to enable the `o` shortcut. The shortcut opens the checked upstream release, falling back to the installed version or latest release page.
 
@@ -105,11 +105,41 @@ opts = {
 
 Restart Neovim after editing the configuration. The entry appears in `:CliHub` and command completion; install it with `:CliHub install fzf`. Reusing a bundled ID replaces the entire recipe, so include all required fields. GitHub digest checksums require the selected release asset to publish its SHA-256 digest.
 
+## Python tools
+
+Install pgcli with:
+
+```vim
+:CliHub install uv pgcli
+```
+
+An existing uv on PATH also works. clihub prefers its managed uv, creates a relocatable virtual environment inside the package version directory, and exports `pgcli` through its normal bin directory. It requires an installed Python 3.10+ and does not download Python. Your project environment and system Python packages are left alone. The pgcli recipe includes `psycopg[binary]`, so a separate system libpq installation is unnecessary.
+
+`i`, `u`, `r`, `x`, version pins, startup ensure, and lock/restore work as for other tools. Checks use PyPI, and `o` opens the package's version page. Requests containing both uv and Python tools install/update uv first; include both in `ensure_installed` if uv should also be managed. Installing only pgcli without an available uv reports how to install the prerequisite.
+
+To register another Python CLI, use this schema in `opts.registry` (the bundled pgcli recipe is shown):
+
+```lua
+pgcli = {
+  description = "PostgreSQL client with completion and syntax highlighting",
+  source = { kind = "pypi", package = "pgcli" },
+  installer = "uv",
+  python = ">=3.10", -- An installed interpreter version or minimum; defaults to >=3.10.
+  requirements = { "psycopg[binary]" }, -- Optional additional packages, with optional extras.
+  bins = { pgcli = "pgcli" }, -- Exported command -> package entry point.
+  verify = { pgcli = { "--version" } },
+}
+```
+
+uv resolves the exact package version and its dependencies into a hashed requirements file, then installs with required hash checks and prebuilt wheels only. Source builds are disabled. Normal updates track the main package version; they do not refresh dependencies when that version is unchanged.
+
 ## Reproduce a tool setup
 
-Run `:CliHub lock` after installing the versions you want. It atomically saves installed tools to `~/.config/nvim/clihub-lock.json` (or your configured `lockfile`), recording exact tags, sources, recipe fingerprints, and archive SHA-256 hashes for the current architecture. Keep this file with your Neovim configuration, including custom registry recipes.
+Run `:CliHub lock` after installing the versions you want. It atomically saves installed tools to `~/.config/nvim/clihub-lock.json` (or your configured `lockfile`), recording exact tags, sources, recipe fingerprints, and SHA-256 hashes for the current architecture. For binary tools these identify release artifacts; for Python tools they identify the complete requirements file, which also records exact dependency versions and distribution hashes. Keep this file with your Neovim configuration, including custom registry recipes.
 
 On another machine with the same architecture, `:CliHub restore` installs exactly those versions and verifies both upstream and locked checksums. It fails on unknown tools, changed recipes, conflicting pins, unsupported architectures, or altered release artifacts. A lockfile with no hash for the host architecture cannot be restored on that host. Saving a lockfile replaces the snapshot; it does not make normal updates follow the lockfile.
+
+Python restores reuse the saved requirements without resolving dependencies again. They require a compatible installed Python interpreter and uv (already available or included in the lockfile); interpreter versions themselves are not locked. Requirements are resolved for the originating interpreter and architecture, so cross-interpreter restores can fail if a locked dependency is incompatible.
 
 For an explicit startup tool list, configure:
 
@@ -129,7 +159,7 @@ Run `:checkhealth clihub` to see the credential source (`github.token`, `GH_TOKE
 
 Successful GitHub release responses are cached per credential under the managed root for five minutes by default. Explicit checks always revalidate with ETags; HTTP 304 responses reuse the cached body. Rate-limit failures explain how to authenticate and show the reset time when provided. Private release asset downloads and GitLab authentication are not supported yet.
 
-Supported payloads are standalone ELF binaries and tar.gz archives containing standalone binaries. Members are selected by exact path, validated for CPU architecture, checksum-verified, and tested before activation. Multiple commands share one package version. Full application bundles, other operating systems, and package-manager/toolchain installs are future work.
+Binary payloads are standalone ELF binaries and tar.gz archives containing standalone binaries. Members are selected by exact path, validated for CPU architecture, checksum-verified, and tested before activation. Python packages use isolated uv environments with hashed wheel installs and entry point checks. Multiple commands share one package version. Full application bundles and other operating systems are future work.
 
 Installations live under `${XDG_DATA_HOME:-$HOME/.local/share}/clihub`. Version directories and receipts track ownership; an atomic `current` symlink activates an update. A failed preparation preserves the installed version. A root lock serializes changes across Neovim processes. Normal operations recover dead-owner locks, while ambiguous lock state is reported for inspection. Foreign files are never overwritten or removed.
 
@@ -142,9 +172,11 @@ For headless automation, `require("clihub").run("install", { "rg" }, function(re
 ```sh
 nvim --headless -u NONE -i NONE -l tests/run.lua
 nvim --headless -u NONE -i NONE -l tests/ui.lua
+# With uv and Python 3.10+ installed:
+nvim --headless -u NONE -i NONE -l tests/python.lua
 ```
 
-The regression runner uses temporary roots and offline fixtures for the real checksum, extraction, activation, lock, and removal paths. Upstream integration checks should be run separately in a disposable root. Both CPU architectures have registry entries; arm64 execution needs an arm64 host.
+The regression runners use temporary roots and offline fixtures for the real checksum, extraction, activation, lock, and removal paths. The Python runner builds local wheel fixtures and tests actual uv resolution, relocation, hashed restore, failed-update rollback, and removal. Upstream integration checks should be run separately in a disposable root. Both CPU architectures have registry entries; arm64 execution needs an arm64 host.
 
 To explicitly download all registered tools into a temporary root and check their complete lifecycle:
 

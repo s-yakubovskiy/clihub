@@ -24,6 +24,8 @@ function M.release_url(recipe, tag)
 			.. source.project
 			.. "/-/releases/"
 			.. (tag and u.encode(tag) or "permalink/latest")
+	elseif source.kind == "pypi" then
+		return "https://pypi.org/project/" .. u.encode(source.package) .. "/" .. (tag and u.encode(tag) .. "/" or "")
 	end
 	if recipe.releases then
 		if not tag and (recipe.releases:find("{tag}", 1, true) or recipe.releases:find("{version}", 1, true)) then
@@ -35,7 +37,7 @@ end
 
 function M.resolve(id, recipe, platform, pin, opts)
 	require("clihub.registry").validate(id, recipe)
-	local target = assert(recipe.targets[platform], id .. ": no binary for " .. platform)
+	local target = assert(require("clihub.registry").target(recipe, platform), id .. ": no binary for " .. platform)
 	local source, release, tag = recipe.source, nil, pin
 	if pin then
 		assert(type(pin) == "string" and pin ~= "" and not pin:find("[%c]"), "Invalid version pin")
@@ -55,11 +57,34 @@ function M.resolve(id, recipe, platform, pin, opts)
 			.. (pin and u.encode(pin) or "permalink/latest")
 		release = vim.json.decode(u.fetch(endpoint))
 		tag = release.tag_name
+	elseif source.kind == "pypi" then
+		local endpoint = "https://pypi.org/pypi/"
+			.. u.encode(source.package)
+			.. (pin and "/" .. u.encode(pin) or "")
+			.. "/json"
+		release = vim.json.decode(u.fetch(endpoint))
+		tag = release.info.version
 	elseif not pin then
 		tag = vim.trim(u.fetch(source.latest))
 	end
 	assert(type(tag) == "string" and tag ~= "" and not tag:find("[%c%s]"), "Invalid upstream release tag")
 	assert(not pin or tag == pin, "Upstream returned a different release than the requested pin")
+	if recipe.installer == "uv" then
+		assert(tag:match("^%d[%w.+!-]*$"), "Invalid Python package version")
+		return {
+			id = id,
+			tag = tag,
+			platform = platform,
+			installer = "uv",
+			url = M.release_url(recipe, tag),
+			bins = vim.deepcopy(target.bins),
+			verify = recipe.verify,
+			source = vim.deepcopy(source),
+			fingerprint = u.fingerprint(recipe),
+			python = recipe.python or ">=3.10",
+			requirements = recipe.requirements or {},
+		}
+	end
 	local values = { tag = tag, version = tag:gsub("^v", "") }
 	local url, digest
 	if source.kind == "direct" then

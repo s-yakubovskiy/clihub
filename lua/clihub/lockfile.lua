@@ -27,6 +27,13 @@ function M.read(path, registry)
 					and digest:match("^%x+$"),
 				"Invalid locked checksum: " .. id
 			)
+			if recipe.installer == "uv" then
+				local requirements = type(item.requirements) == "table" and item.requirements[platform]
+				assert(
+					type(requirements) == "string" and vim.fn.sha256(requirements) == digest,
+					"Invalid locked Python requirements: " .. id
+				)
+			end
 		end
 	end
 	return data.packages
@@ -54,6 +61,13 @@ function M.write(path, root, registry)
 				fingerprint = receipt.fingerprint,
 				sha256 = { [receipt.platform] = receipt.sha256 },
 			}
+			if recipe.installer == "uv" then
+				assert(
+					type(receipt.requirements) == "string" and vim.fn.sha256(receipt.requirements) == receipt.sha256,
+					"Invalid installed Python requirements: " .. id
+				)
+				packages[id].requirements = { [receipt.platform] = receipt.requirements }
+			end
 		end
 	end
 	local lines = { "{", '  "version": 1,', '  "packages": {' }

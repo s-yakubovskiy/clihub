@@ -120,7 +120,7 @@ function M.status(id)
 		end
 	end
 	local platform_ok, platform = pcall(u.platform)
-	local target = platform_ok and recipe.targets[platform] or nil
+	local target = platform_ok and require("clihub.registry").target(recipe, platform) or nil
 	for name in pairs((ok and current and current.bins) or (target and target.bins) or {}) do
 		local path = vim.fn.exepath(name)
 		state.commands[name] = { path = path, managed = M.config.root .. "/bin/" .. name }
@@ -261,6 +261,13 @@ function M.run(action, ids, done, opts)
 		seen[id] = true
 		return true
 	end, ids)
+	-- Bootstrap uv before Python tools when both are requested, including lockfile restores.
+	if (action == "install" or action == "update") and vim.tbl_contains(ids, "uv") then
+		ids = vim.tbl_filter(function(id)
+			return id ~= "uv"
+		end, ids)
+		table.insert(ids, 1, "uv")
+	end
 	local platform = u.platform()
 	if M.busy then
 		queue[#queue + 1] =

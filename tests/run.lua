@@ -94,10 +94,10 @@ end
 
 check("registry validates every bundled target and rejects traversal/templates", function()
 	local registry = require("clihub.registry")
-	equal(vim.tbl_count(registry.load()), 8)
+	equal(vim.tbl_count(registry.load()), 9)
 	for _, target in ipairs({ "linux-amd64", "linux-arm64" }) do
 		for id, entry in pairs(registry.bundled) do
-			assert(entry.targets[target], id .. " missing " .. target)
+			assert(registry.target(entry, target), id .. " missing " .. target)
 		end
 	end
 	local bad = vim.deepcopy(recipe)
@@ -111,6 +111,45 @@ check("registry validates every bundled target and rejects traversal/templates",
 	raises(function()
 		u.expand("{tag", { tag = "v1" })
 	end, "Invalid template")
+end)
+
+check("Python recipes validate names and resolve PyPI versions and release links", function()
+	local registry = require("clihub.registry")
+	local entry = vim.deepcopy(registry.bundled.pgcli)
+	local saved, requested = u.fetch
+	u.fetch = function(url)
+		requested = url
+		return vim.json.encode({ info = { version = "4.7.1" } })
+	end
+	local ok, err = pcall(function()
+		local resolved = sources.resolve("pgcli", entry, platform)
+		equal(requested, "https://pypi.org/pypi/pgcli/json")
+		equal(resolved.tag, "4.7.1")
+		equal(resolved.bins, { pgcli = "pgcli" })
+		equal(resolved.requirements, { "psycopg[binary]" })
+		equal(sources.release_url(entry, resolved.tag), "https://pypi.org/project/pgcli/4.7.1/")
+		equal(sources.resolve("pgcli", entry, "linux-arm64", "4.7.1").tag, "4.7.1")
+		equal(requested, "https://pypi.org/pypi/pgcli/4.7.1/json")
+		raises(function()
+			sources.resolve("pgcli", entry, platform, "1.0.0")
+		end, "different release")
+	end)
+	u.fetch = saved
+	assert(ok, err)
+	entry.requirements = { "--index-url=https://other.test" }
+	raises(function()
+		registry.validate("pgcli", entry)
+	end, "expected a Python package name")
+	entry.requirements = {}
+	entry.bins.pgcli = "../outside"
+	raises(function()
+		registry.validate("pgcli", entry)
+	end, "invalid member path")
+	entry.bins.pgcli = "pgcli"
+	entry.installer = "artifact"
+	raises(function()
+		registry.validate("pgcli", entry)
+	end, "PyPI requires")
 end)
 
 check("checksum parser matches exact names, rejects duplicates and missing hashes", function()
@@ -488,6 +527,28 @@ check("version comparison orders upgrades, downgrades, prereleases, and ignores 
 	equal(u.compare("v1.2.3+build.1", "1.2.3+build.2"), 0)
 	equal(u.compare("release-2026-10", "nightly-42"), nil)
 	equal(u.compare("nightly-42", "nightly-42"), 0)
+end)
+
+check("batch installs bootstrap requested uv before Python tools", function()
+	local saved, order, results = install.apply, {}, nil
+	hub.setup({ root = workspace .. "/bootstrap", path = "none" })
+	install.apply = function(_, id)
+		order[#order + 1] = id
+		return { tag = id == "uv" and "0.13.6" or "4.7.1" }
+	end
+	local ok, err = pcall(function()
+		hub.run("install", { "pgcli", "uv" }, function(value)
+			results = value
+		end)
+		assert(vim.wait(5000, function()
+			return results ~= nil
+		end, 10))
+		equal(order, { "uv", "pgcli" })
+		assert(results.uv.ok and results.pgcli.ok)
+	end)
+	install.apply = saved
+	hub.setup({ root = root, path = "none", registry = { probe = recipe } })
+	assert(ok, err)
 end)
 
 check("checks survive restart, ignore pins, and invalidate changed recipes and corrupt cache", function()

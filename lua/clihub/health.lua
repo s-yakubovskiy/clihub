@@ -19,6 +19,21 @@ function M.check()
 		health.error(tostring(platform))
 	end
 	health.info("Root: " .. config.root)
+	local python_tools = false
+	for _, recipe in pairs(hub.registry) do
+		python_tools = python_tools or recipe.installer == "uv"
+	end
+	if python_tools then
+		local executable = require("clihub.python").executable(config.root)
+		if executable then
+			health.ok("Python tool installer: " .. executable)
+		else
+			health.warn("Python tools require uv; run :CliHub install uv first")
+		end
+		health.info(
+			"Python tools require a compatible installed Python (pgcli: 3.10+); clihub does not download Python"
+		)
+	end
 	local auth, auth_error, finished
 	require("clihub.util").async(function()
 		return require("clihub.http").resolve_auth()

@@ -17,6 +17,15 @@ local function github(repo, assets, bins, checksum, verify)
 end
 
 M.bundled = {
+	pgcli = {
+		description = "PostgreSQL client with completion and syntax highlighting",
+		source = { kind = "pypi", package = "pgcli" },
+		installer = "uv",
+		python = ">=3.10",
+		requirements = { "psycopg[binary]" },
+		bins = { pgcli = "pgcli" },
+		verify = { pgcli = { "--version" } },
+	},
 	gh = github("cli/cli", {
 		amd64 = "gh_{version}_linux_amd64.tar.gz",
 		arm64 = "gh_{version}_linux_arm64.tar.gz",
@@ -103,12 +112,24 @@ for _, arch in ipairs({ "amd64", "arm64" }) do
 	}
 end
 
+function M.target(recipe, platform)
+	if recipe.installer == "uv" then
+		assert(platform == "linux-amd64" or platform == "linux-arm64", "Unsupported platform")
+		return { format = "uv", bins = recipe.bins }
+	end
+	return recipe.targets[platform]
+end
+
 function M.validate(id, recipe)
 	assert(u.name(id), "Invalid package ID: " .. tostring(id))
-	assert(type(recipe) == "table" and recipe.installer == "artifact", id .. ": unsupported installer")
+	assert(
+		type(recipe) == "table" and (recipe.installer == "artifact" or recipe.installer == "uv"),
+		id .. ": unsupported installer"
+	)
 	local source = recipe.source
 	assert(type(source) == "table", id .. ": missing source")
-	assert(vim.tbl_contains({ "github", "gitlab", "direct" }, source.kind), id .. ": unsupported source")
+	assert(vim.tbl_contains({ "github", "gitlab", "direct", "pypi" }, source.kind), id .. ": unsupported source")
+	assert((source.kind == "pypi") == (recipe.installer == "uv"), id .. ": PyPI requires the uv installer")
 	local function https(url)
 		assert(type(url) == "string" and url:match("^https://") and not url:find("[%c]"), id .. ": HTTPS URL required")
 	end
@@ -126,24 +147,51 @@ function M.validate(id, recipe)
 			type(source.project) == "string" and source.project ~= "" and not source.project:find("[%c]"),
 			id .. ": invalid GitLab project"
 		)
+	elseif source.kind == "pypi" then
+		assert(u.name(source.package), id .. ": invalid Python package")
+		local python = recipe.python or ">=3.10"
+		assert(
+			type(python) == "string" and (python:match("^%d[%d.]*$") or python:match("^>=%d[%d.]*$")),
+			id .. ": invalid Python version"
+		)
+		assert(
+			type(recipe.requirements or {}) == "table" and vim.islist(recipe.requirements or {}),
+			id .. ": invalid Python requirements"
+		)
+		for _, requirement in ipairs(recipe.requirements or {}) do
+			assert(
+				u.name(requirement)
+					or (type(requirement) == "string" and requirement:match("^[%w][%w_.-]*%[[%w_,.-]+%]$")),
+				id .. ": expected a Python package name with optional extras"
+			)
+		end
 	else
 		https(source.latest)
 	end
-	assert(type(recipe.targets) == "table" and next(recipe.targets), id .. ": missing targets")
-	for platform, target in pairs(recipe.targets) do
+	local targets = recipe.targets
+	if recipe.installer == "uv" then
+		targets =
+			{ ["linux-amd64"] = M.target(recipe, "linux-amd64"), ["linux-arm64"] = M.target(recipe, "linux-arm64") }
+	end
+	assert(type(targets) == "table" and next(targets), id .. ": missing targets")
+	for platform, target in pairs(targets) do
 		assert(platform == "linux-amd64" or platform == "linux-arm64", id .. ": invalid target " .. platform)
-		assert(target.format == "binary" or target.format == "tar.gz", id .. ": unsupported archive format")
+		assert(
+			target.format == "binary" or target.format == "tar.gz" or recipe.installer == "uv",
+			id .. ": unsupported archive format"
+		)
 		local values = { tag = "v1.2.3", version = "1.2.3", asset = "example.tar.gz" }
 		if source.kind == "direct" then
 			https(u.expand(target.url, values))
-		else
+		elseif recipe.installer ~= "uv" then
 			assert(u.member(u.expand(target.asset, values)), id .. ": invalid asset name")
 		end
 		assert(type(target.bins) == "table" and next(target.bins), id .. ": missing exported commands")
 		for command, member in pairs(target.bins) do
 			assert(u.name(command), id .. ": invalid exported command")
 			assert(
-				(target.format == "binary" and member == ".")
+				(recipe.installer == "uv" and u.name(member))
+					or (target.format == "binary" and member == ".")
 					or (target.format == "tar.gz" and u.member(u.expand(member, values))),
 				id .. ": invalid member path"
 			)
@@ -161,15 +209,17 @@ function M.validate(id, recipe)
 			id .. ": raw binary exports exactly one command"
 		)
 		local checksum = target.checksum or recipe.checksum
-		assert(type(checksum) == "table", id .. ": SHA-256 configuration required")
-		if checksum.kind == "github_digest" then
-			assert(source.kind == "github", id .. ": asset digest requires GitHub")
-		else
-			assert(checksum.format == "raw" or checksum.format == "gnu", id .. ": unsupported checksum format")
-			if source.kind == "direct" then
-				https(u.expand(checksum.url, values))
+		if recipe.installer ~= "uv" then
+			assert(type(checksum) == "table", id .. ": SHA-256 configuration required")
+			if checksum.kind == "github_digest" then
+				assert(source.kind == "github", id .. ": asset digest requires GitHub")
 			else
-				assert(u.member(u.expand(checksum.asset, values)), id .. ": invalid checksum asset")
+				assert(checksum.format == "raw" or checksum.format == "gnu", id .. ": unsupported checksum format")
+				if source.kind == "direct" then
+					https(u.expand(checksum.url, values))
+				else
+					assert(u.member(u.expand(checksum.asset, values)), id .. ": invalid checksum asset")
+				end
 			end
 		end
 	end

@@ -82,6 +82,9 @@ local function source_label(source)
 	if source.kind == "gitlab" then
 		return source.api:gsub("/api/v4/?$", "") .. "/" .. source.project
 	end
+	if source.kind == "pypi" then
+		return "pypi.org/project/" .. source.package .. " · uv"
+	end
 	return source.latest
 end
 
