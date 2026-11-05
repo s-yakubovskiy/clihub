@@ -94,7 +94,7 @@ end
 
 check("registry validates every bundled target and rejects traversal/templates", function()
 	local registry = require("clihub.registry")
-	equal(vim.tbl_count(registry.load()), 9)
+	equal(vim.tbl_count(registry.load()), 10)
 	for _, target in ipairs({ "linux-amd64", "linux-arm64" }) do
 		for id, entry in pairs(registry.bundled) do
 			assert(registry.target(entry, target), id .. " missing " .. target)
@@ -366,13 +366,26 @@ check("live locks reject competitors and dead-owner locks are reclaimed", functi
 	assert(not uv.fs_lstat(root .. "/.lock"))
 end)
 
-check("multiple commands share one atomic package version", function()
+check("multiple commands are prepared before verification and share one atomic package version", function()
 	local multi = vim.deepcopy(recipe)
 	multi.targets[platform].bins.probe2 = "bin/probe"
 	multi.verify.probe2 = { "--version" }
-	await(function()
-		install.apply(root, "probe", multi, platform)
+	local saved = u.run
+	u.run = function(args, opts)
+		local directory = args[1]:match("^(.-/payload/bin)/probe2?$")
+		if directory then
+			assert(vim.fn.executable(directory .. "/probe") == 1, "Sibling probe was not prepared")
+			assert(vim.fn.executable(directory .. "/probe2") == 1, "Sibling probe2 was not prepared")
+		end
+		return saved(args, opts)
+	end
+	local ok, err = pcall(function()
+		await(function()
+			install.apply(root, "probe", multi, platform)
+		end)
 	end)
+	u.run = saved
+	assert(ok, err)
 	process({ root .. "/bin/probe2", "--version" })
 	equal(uv.fs_readlink(root .. "/bin/probe2"), "../packages/probe/current/bin/probe2")
 	await(function()

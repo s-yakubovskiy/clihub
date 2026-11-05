@@ -236,7 +236,10 @@ function M.apply(root, id, recipe, platform, pin, progress, opts)
 				end
 				u.elf(destination, platform)
 				assert(uv.fs_chmod(destination, 493))
-				local args = { destination }
+			end
+			-- Launchers such as uvx need their sibling binaries available during verification.
+			for command in pairs(resolved.bins) do
+				local args = { payload .. "/bin/" .. command }
 				vim.list_extend(args, resolved.verify[command])
 				u.run(args, { timeout = 10000 })
 			end

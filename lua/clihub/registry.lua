@@ -17,6 +17,10 @@ local function github(repo, assets, bins, checksum, verify)
 end
 
 M.bundled = {
+	tofu = github("opentofu/opentofu", {
+		amd64 = "tofu_{version}_linux_amd64.tar.gz",
+		arm64 = "tofu_{version}_linux_arm64.tar.gz",
+	}, { tofu = "tofu" }, { asset = "tofu_{version}_SHA256SUMS", format = "gnu" }, { tofu = { "version" } }),
 	pgcli = {
 		description = "PostgreSQL client with completion and syntax highlighting",
 		source = { kind = "pypi", package = "pgcli" },
@@ -87,6 +91,7 @@ M.bundled = {
 }
 
 for id, description in pairs({
+	tofu = "Manage infrastructure with OpenTofu",
 	gh = "GitHub command line",
 	rg = "Search file contents, fast",
 	grpcurl = "Call gRPC services from your terminal",
