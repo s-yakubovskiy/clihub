@@ -1,5 +1,6 @@
 local u = require("clihub.util")
 local installer = require("clihub.install")
+local log = require("clihub.log")
 local M = { available = {}, errors = {}, progress = {}, results = {}, checks = {} }
 local queue = {}
 
@@ -25,16 +26,24 @@ function M.setup(opts)
 	root = vim.fs.normalize(vim.fn.fnamemodify(vim.fn.expand(root), ":p")):gsub("/$", "")
 	assert(root ~= "" and root ~= vim.env.HOME, "Choose a dedicated clihub root")
 	assert(opts.path == nil or opts.path == "prepend" or opts.path == "none", "path must be 'prepend' or 'none'")
+	assert(
+		type(opts.check_concurrency or 4) == "number"
+			and (opts.check_concurrency or 4) >= 1
+			and (opts.check_concurrency or 4) <= 16
+			and (opts.check_concurrency or 4) % 1 == 0,
+		"check_concurrency must be an integer from 1 to 16"
+	)
 	M.config = {
 		root = root,
 		path = opts.path or "prepend",
+		check_concurrency = opts.check_concurrency or 4,
 		versions = vim.deepcopy(opts.versions or {}),
 		lockfile = vim.fs.normalize(
 			vim.fn.fnamemodify(vim.fn.expand(opts.lockfile or (vim.fn.stdpath("config") .. "/clihub-lock.json")), ":p")
 		),
 		ensure_installed = vim.deepcopy(opts.ensure_installed or {}),
 	}
-	M.registry = require("clihub.registry").load(opts.registry)
+	M.registry = require("clihub.registry").load(opts.registry, opts.overrides)
 	for id, tag in pairs(M.config.versions) do
 		assert(
 			M.registry[id] and type(tag) == "string" and tag ~= "" and not tag:find("[%s%c]"),
@@ -77,7 +86,7 @@ function M.setup(opts)
 			if M.config == configured then
 				local ok, err = pcall(M.ensure_tools)
 				if not ok then
-					vim.notify(tostring(err), vim.log.levels.ERROR)
+					vim.notify(require("clihub.log").summary(err), vim.log.levels.ERROR)
 				end
 			end
 		end)
@@ -106,7 +115,8 @@ function M.status(id)
 		installed = ok and current and current.tag or nil,
 		available = M.available[id],
 		pin = M.config.versions[id],
-		error = M.errors[id] or (not ok and tostring(current) or nil),
+		error = M.errors[id] or (not ok and log.summary(current) or nil),
+		log = vim.uv.fs_stat(log.path(M.config.root, id)) and log.path(M.config.root, id) or nil,
 		progress = M.progress[id],
 		commands = {},
 		checked_at = M.checks[id] and M.checks[id].checked_at,
@@ -125,7 +135,7 @@ function M.status(id)
 		local path = vim.fn.exepath(name)
 		state.commands[name] = { path = path, managed = M.config.root .. "/bin/" .. name }
 	end
-	state.comparison = u.compare(state.available, state.installed)
+	state.comparison = u.compare(state.available, state.installed, recipe.version_prefix)
 	state.stale = state.checked_at and os.time() - state.checked_at >= 86400 or false
 	state.release_url = require("clihub.sources").release_url(recipe, state.available or state.installed)
 	state.status = state.progress
@@ -148,63 +158,69 @@ end
 local function execute(action, ids, done, platform, locked)
 	M.busy = true
 	local results = {}
-	u.async(function()
-		for _, id in ipairs(ids) do
-			M.errors[id] = nil
-			M.progress[id] = action
-			M.changed()
-			local ok, result = xpcall(function()
-				if action == "check" then
-					local resolved =
-						require("clihub.sources").resolve(id, M.registry[id], platform, nil, { refresh = true })
-					remember_check(id, resolved.tag)
-					return { tag = resolved.tag }
-				elseif action == "remove" then
-					return installer.remove(M.config.root, id)
-				else
-					local entry = locked and locked[id]
-					local installed = installer.apply(
-						M.config.root,
-						id,
-						M.registry[id],
-						platform,
-						entry and entry.tag or M.config.versions[id],
-						function(message)
-							M.progress[id] = message
-							M.changed()
-						end,
-						{
-							locked = entry,
-							only_upgrade = action == "update" and not entry and not M.config.versions[id],
-						}
-					)
-					if not entry and not M.config.versions[id] then
-						local tag = installed.latest or installed.tag
-						M.available[id] = tag
-						local saved, err = pcall(remember_check, id, tag)
-						if not saved then
-							installed.warnings = installed.warnings or {}
-							table.insert(installed.warnings, "Could not save update check: " .. tostring(err))
-						end
-					elseif not M.checks[id] then
-						M.available[id] = installed.latest or installed.tag
+	local function perform(id)
+		log.start(M.config.root, id, action)
+		M.errors[id] = nil
+		M.progress[id] = action
+		M.changed()
+		local ok, result = xpcall(function()
+			if action == "check" then
+				local resolved =
+					require("clihub.sources").resolve(id, M.registry[id], platform, nil, { refresh = true })
+				remember_check(id, resolved.tag)
+				return { tag = resolved.tag }
+			elseif action == "remove" then
+				return installer.remove(M.config.root, id)
+			else
+				local entry = locked and locked[id]
+				local installed = installer.apply(
+					M.config.root,
+					id,
+					M.registry[id],
+					platform,
+					entry and entry.tag or M.config.versions[id],
+					function(message)
+						M.progress[id] = message
+						M.changed()
+					end,
+					{
+						locked = entry,
+						only_upgrade = action == "update" and not entry and not M.config.versions[id],
+					}
+				)
+				if not entry and not M.config.versions[id] then
+					local tag = installed.latest or installed.tag
+					M.available[id] = tag
+					local saved, err = pcall(remember_check, id, tag)
+					if not saved then
+						installed.warnings = installed.warnings or {}
+						table.insert(installed.warnings, "Could not save update check: " .. tostring(err))
 					end
-					return installed
+				elseif not M.checks[id] then
+					M.available[id] = installed.latest or installed.tag
 				end
-			end, debug.traceback)
-			results[id] = { ok = ok, result = ok and result or nil, error = not ok and tostring(result) or nil }
-			M.results[id] = results[id]
-			M.errors[id] = not ok and tostring(result) or nil
-			if not ok and action ~= "remove" then
-				M.available[id] = nil
-				M.checks[id] = nil
-				pcall(u.unlink, check_path(id))
+				return installed
 			end
-			M.progress[id] = nil
-			M.changed()
+		end, debug.traceback)
+		local saved, path = pcall(log.finish, ok, result)
+		results[id] = {
+			ok = ok,
+			result = ok and result or nil,
+			error = not ok and log.redact(result) or nil,
+			log = saved and path or nil,
+			log_error = not saved and log.summary(path) or nil,
+		}
+		M.results[id] = results[id]
+		M.errors[id] = not ok and log.summary(result) or nil
+		if not ok and action ~= "remove" then
+			M.available[id] = nil
+			M.checks[id] = nil
+			pcall(u.unlink, check_path(id))
 		end
-		return results
-	end, function(ok, result)
+		M.progress[id] = nil
+		M.changed()
+	end
+	local function complete(ok, result)
 		M.busy = #queue > 0
 		if M.busy then
 			vim.schedule(function()
@@ -219,11 +235,11 @@ local function execute(action, ids, done, platform, locked)
 			local failures = {}
 			for id, item in pairs(results) do
 				if not item.ok then
-					failures[#failures + 1] = id .. ": " .. item.error
+					failures[#failures + 1] = id .. ": " .. log.summary(item.error) .. "; :CliHub log " .. id
 				end
 			end
 			if not ok then
-				failures[#failures + 1] = tostring(result)
+				failures[#failures + 1] = log.summary(result)
 			end
 			vim.notify(
 				#failures > 0 and table.concat(failures, "\n")
@@ -231,7 +247,49 @@ local function execute(action, ids, done, platform, locked)
 				#failures > 0 and vim.log.levels.ERROR or vim.log.levels.INFO
 			)
 		end
-	end)
+	end
+	local function start()
+		local next_index = 1
+		local remaining = math.min(#ids, action == "check" and M.config.check_concurrency or 1)
+		local failure
+		if remaining == 0 then
+			return complete(true, results)
+		end
+		for _ = 1, remaining do
+			u.async(function()
+				while next_index <= #ids do
+					local id = ids[next_index]
+					next_index = next_index + 1
+					perform(id)
+				end
+			end, function(ok, err)
+				if not ok then
+					failure = err
+				end
+				remaining = remaining - 1
+				if remaining == 0 then
+					complete(not failure, failure or results)
+				end
+			end)
+		end
+	end
+	if action == "check" then
+		local github = false
+		for _, id in ipairs(ids) do
+			M.progress[id] = "queued check"
+			github = github or M.registry[id].source.kind == "github"
+		end
+		M.changed()
+		if github then
+			-- Resolve credentials once before concurrent requests can yield in gh auth token.
+			return u.async(function()
+				pcall(require("clihub.http").resolve_auth)
+			end, function()
+				start()
+			end)
+		end
+	end
+	start()
 end
 
 -- The public async API is also usable from headless Neovim; done receives one result per tool.
@@ -353,6 +411,9 @@ function M.command(args)
 	if action == "lock" or action == "restore" or action == "ensure" then
 		assert(#ids == 0, action .. " does not accept tool IDs")
 		return ({ lock = M.lock, restore = M.restore, ensure = M.ensure_tools })[action]()
+	elseif action == "log" or action == "copy-log" then
+		assert(#ids == 1 and M.registry[ids[1]], "Specify one registered tool")
+		return log[action == "log" and "open" or "copy"](M.config.root, ids[1])
 	elseif action == "releases" then
 		assert(#ids == 1, "Specify one tool")
 		return M.open_release(ids[1])
@@ -366,7 +427,7 @@ function M.command(args)
 				if choice == "Remove managed installations" then
 					local ok, err = pcall(M.run, action, ids)
 					if not ok then
-						vim.notify(tostring(err), vim.log.levels.ERROR)
+						vim.notify(require("clihub.log").summary(err), vim.log.levels.ERROR)
 					end
 				end
 			end
@@ -380,7 +441,7 @@ function M.complete(lead, line)
 	local words = vim.split(line, "%s+", { trimempty = true })
 	local candidates = #words <= 2
 			and not line:match("^%S+%s+%S+%s")
-			and { "install", "update", "check", "remove", "lock", "restore", "ensure", "releases" }
+			and { "install", "update", "check", "remove", "lock", "restore", "ensure", "releases", "log", "copy-log" }
 		or M.list()
 	return vim.tbl_filter(function(item)
 		return vim.startswith(item, lead)

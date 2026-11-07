@@ -59,6 +59,7 @@ local function credentials()
 		if not token then
 			token_source = "anonymous"
 		end
+		require("clihub.log").hide(token)
 		token_loaded = true
 	end
 	return token

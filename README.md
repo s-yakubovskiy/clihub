@@ -2,7 +2,7 @@
 
 A small Neovim registry and installer for user-managed CLI tools. Commands installed by clihub can be used from Neovim and ordinary terminals.
 
-Requires Neovim 0.10+, Linux x86_64 or arm64, curl 7.76+, GNU tar, and sha256sum. No Lua dependencies. Current recipes: `kubectl`, `rg`, `grpcurl`, `k9s`, `gh`, `glab`, `uv` (also exports `uvx`), `fastfetch`, `pgcli`, and `tofu` (OpenTofu). Python tools additionally require uv and an installed Python 3.10+.
+Requires Neovim 0.10+, Linux x86_64 or arm64, curl 7.76+, GNU tar, and sha256sum. No Lua dependencies. Current recipes: `kubectl`, `rg`, `grpcurl`, `k9s`, `gh`, `glab`, `uv` (also exports `uvx`), `fastfetch`, `pgcli`, `tofu` (OpenTofu), `jq`, `zoxide`, and `stern`. Python tools additionally require uv and an installed Python 3.10+.
 
 ## Setup
 
@@ -37,19 +37,26 @@ The abbreviation expands when you press Space or Enter; scripts and mappings sho
 ```vim
 :CliHub
 :CliHub install kubectl rg grpcurl k9s
+:CliHub install jq zoxide stern
 :CliHub check
 :CliHub update
 :CliHub update rg
 :CliHub remove rg
 :CliHub releases rg
+:CliHub log rg
+:CliHub copy-log rg
 :CliHub lock
 :CliHub restore
 :checkhealth clihub
 ```
 
-The centered, theme-aware window groups tools by status. Use `1` / `2` / `3` or `<Tab>` to switch All / Installed / Updates, `j` / `k` to select a tool, and `<Enter>` to expand its details inline. Actions: `i` install, `u` update, `r` check, `x` remove, `o` open release notes, `U` update installed, `R` check installed, and `q` / `<Esc>` close. Normal `/` search works. The default local key binding is `<leader>cH`.
+The centered, theme-aware window groups tools by status. Use `1` / `2` / `3` or `<Tab>` to switch All / Installed / Updates, `j` / `k` to select a tool, and `<Enter>` to expand its details inline. Actions: `i` install, `u` update, `r` check, `x` remove, `o` open release notes, `l` open the operation log, `y` copy diagnostics, `U` update installed, `R` check installed, and `q` / `<Esc>` close. Normal `/` search works. The default local key binding is `<leader>cH`.
 
 Select another tool and press `i` while an install runs to queue it. Queued requests run in order and appear under In progress. Repeated actions on an active or queued tool are ignored in the UI. Closing the window keeps the queue running while Neovim stays open.
+
+Update checks (`r`, `R`, and `:CliHub check`) fetch metadata for up to four tools concurrently by default. Set `check_concurrency` to an integer from 1 to 16 to adjust this; 1 keeps checks serial. Install, update, and removal operations remain serial, and a queued operation starts after the complete check batch finishes.
+
+Failures show a short reason in the registry and notification. The latest operation log for each tool is saved under `<root>/logs/<tool>.log` with private permissions; a new operation replaces that tool's previous log. Logs retain commands, process output, and tracebacks. Sensitive requests omit arguments and output, and known GitHub tokens are redacted. Use `l` or `:CliHub log <tool>` to inspect the full log. Press `y` in either window, or run `:CliHub copy-log <tool>`, to copy diagnostics to the clipboard when available and the unnamed register. Logs remain available after restarting Neovim.
 
 `u` (or `:CliHub update <id>`) installs a tool if absent and updates it if already installed. `U` updates all clihub installations, skipping pinned tools; it does not install absent registry entries. `check` and `update` without names operate on clihub installations. Removal asks for confirmation in the UI/command; the Lua API is intended for automation and does not prompt.
 
@@ -63,11 +70,13 @@ Semantic versions distinguish upgrades, newer installed versions, and pins. Buil
 require("clihub").setup({
   -- root = "/absolute/path/to/clihub",
   path = "prepend", -- or "none"
+  check_concurrency = 4, -- Concurrent metadata checks; installs remain serial.
   versions = { kubectl = "v1.37.0" }, -- exact upstream tags
   ensure_installed = {}, -- IDs to install/reconcile asynchronously at startup
   -- lockfile = vim.fn.stdpath("config") .. "/clihub-lock.json",
   github = { use_gh = true, cache_ttl = 300 },
   registry = {}, -- Add entries or replace a bundled recipe by its ID.
+  overrides = {}, -- Partial patches applied after registry entries are loaded.
 })
 ```
 
@@ -104,6 +113,29 @@ opts = {
 ```
 
 Restart Neovim after editing the configuration. The entry appears in `:CliHub` and command completion; install it with `:CliHub install fzf`. Reusing a bundled ID replaces the entire recipe, so include all required fields. GitHub digest checksums require the selected release asset to publish its SHA-256 digest.
+
+Use `opts.overrides` to patch individual fields of a bundled or custom recipe. Patches merge nested tables and replace argument lists, then the complete resulting recipe is validated. For example, only on a host whose old glibc needs the fastfetch compatibility build:
+
+```lua
+opts = {
+  overrides = {
+    fastfetch = {
+      targets = {
+        ["linux-amd64"] = {
+          asset = "fastfetch-linux-amd64-polyfilled.tar.gz",
+          bins = { fastfetch = "fastfetch-linux-amd64-polyfilled/usr/bin/fastfetch" },
+        },
+      },
+    },
+  },
+}
+```
+
+The source, checksum rules, format, and other architecture targets are inherited. Unknown tool IDs and invalid final recipes are rejected. Keep these patches in the affected machine's configuration. To remove inherited fields or commands, supply a complete replacement in `registry`. Installation fingerprints and lockfiles use the final merged recipe.
+
+Some tools use a tag prefix beyond `v`; a recipe can set `version_prefix = "jq-"` to compare jq-style tags as semantic versions. Version pins and receipts retain the original upstream tag, such as `jq-1.8.2`.
+
+Installing zoxide provides the executable. Enable its shell integration separately, for example with `eval "$(zoxide init zsh)"` in your zsh configuration.
 
 ## Python tools
 

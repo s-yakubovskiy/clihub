@@ -18,6 +18,7 @@ hub.status = function(id)
 		state.installed, state.available = "99.0.0", "98.0.0"
 	end
 	state.release_url = require("clihub.sources").release_url(hub.registry[id], state.available)
+	state.comparison = require("clihub.util").compare(state.available, state.installed, hub.registry[id].version_prefix)
 	return state
 end
 vim.o.columns, vim.o.lines = 110, 40
@@ -91,5 +92,37 @@ assert(not vim.api.nvim_win_is_valid(win), "Close mapping did not close the floa
 require("clihub.ui").open()
 assert(vim.bo.filetype == "clihub", "Float could not reopen")
 assert(not vim.uv.fs_stat(hub.config.root), "Opening the UI created an installation root")
+-- Logs open above the registry, copy the full text, and return to the same registry window.
+local registry_win = vim.api.nvim_get_current_win()
+local diagnostics = "fixture failure\nstack traceback:\nfull diagnostic details\n"
+require("clihub.util").atomic_write(require("clihub.log").path(hub.config.root, "pgcli"), diagnostics)
+hub.errors.pgcli = "fixture failure"
+hub.changed()
+for row, line in ipairs(vim.api.nvim_buf_get_lines(0, 0, -1, false)) do
+	if line:find("pgcli", 1, true) then
+		vim.api.nvim_win_set_cursor(0, { row, 0 })
+		break
+	end
+end
+local saved_setreg, saved_notify, copied = vim.fn.setreg, vim.notify, {}
+vim.fn.setreg = function(register, value)
+	copied[register] = value
+end
+vim.notify = function() end
+press("l")
+local log_win = vim.api.nvim_get_current_win()
+assert(log_win ~= registry_win and vim.bo.filetype == "log", "Log did not open separately")
+assert(table.concat(vim.api.nvim_buf_get_lines(0, 0, -1, false), "\n"):find("full diagnostic details", 1, true))
+press("y")
+assert(copied['"'] == diagnostics, "Copy omitted diagnostic details")
+press("q")
+assert(not vim.api.nvim_win_is_valid(log_win) and vim.api.nvim_win_is_valid(registry_win))
+vim.api.nvim_set_current_win(registry_win)
+press("y")
+assert(copied['"'] == diagnostics)
+vim.fn.setreg, vim.notify = saved_setreg, saved_notify
+require("clihub.util").delete(hub.config.root)
 hub.status = original_status
-print("CliHub UI: float, highlighting, filters, local registry, details, selection, resize, close/reopen passed")
+print(
+	"CliHub UI: float, highlighting, filters, local registry, details, selection, resize, logs/copy, close/reopen passed"
+)

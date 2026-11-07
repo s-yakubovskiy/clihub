@@ -176,7 +176,7 @@ function M.apply(root, id, recipe, platform, pin, progress, opts)
 			assert(opts.locked.sha256[platform], "No locked checksum for " .. id .. " on " .. platform)
 		end
 		if opts.only_upgrade and current then
-			local comparison = u.compare(resolved.tag, current.tag)
+			local comparison = u.compare(resolved.tag, current.tag, recipe.version_prefix)
 			assert(
 				comparison ~= nil,
 				"Cannot order release tags for " .. id .. "; use install to explicitly select the upstream release"

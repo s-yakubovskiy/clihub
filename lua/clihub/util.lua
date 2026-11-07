@@ -100,7 +100,7 @@ function M.json_read(path)
 end
 
 -- Unknown tag schemes are deliberately unordered, rather than guessed upgrades.
-function M.compare(a, b)
+function M.compare(a, b, prefix)
 	if not a or not b then
 		return nil
 	end
@@ -108,6 +108,9 @@ function M.compare(a, b)
 		return 0
 	end
 	local function parse(tag)
+		if prefix and tag:sub(1, #prefix) == prefix then
+			tag = tag:sub(#prefix + 1)
+		end
 		return vim.version.parse(tag:gsub("%+[%w.-]+$", ""), { strict = true })
 	end
 	local left, right = parse(a), parse(b)
@@ -209,7 +212,7 @@ function M.run(args, opts)
 			local resumed, err = coroutine.resume(thread, result, output_error)
 			-- Operation coroutines handle errors through xpcall at their entry point.
 			if not resumed then
-				vim.notify(tostring(err), vim.log.levels.ERROR)
+				vim.notify(require("clihub.log").summary(err), vim.log.levels.ERROR)
 			end
 		end)
 	end)
@@ -220,16 +223,23 @@ function M.run(args, opts)
 		error(process)
 	end
 	local result, write_error = coroutine.yield()
+	require("clihub.log").record(args, result, opts)
 	assert(not write_error, write_error)
 	assert(
 		result.code == 0,
 		opts.sensitive and (args[1] .. " request failed (exit " .. result.code .. ")")
 			or (
-				table.concat(args, " ")
+				(
+					(result.stderr or ""):match("[^\r\n]+")
+					or (result.stdout or ""):match("[^\r\n]+")
+					or (args[1] .. " failed")
+				)
+				.. "\nCommand: "
+				.. table.concat(args, " ")
 				.. "\n"
 				.. (result.stderr or "")
 				.. "\n"
-				.. (result.stdout or ""):sub(1, 4096)
+				.. (result.stdout or "")
 				.. "\n(exit "
 				.. result.code
 				.. ")"

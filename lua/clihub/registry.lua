@@ -17,6 +17,26 @@ local function github(repo, assets, bins, checksum, verify)
 end
 
 M.bundled = {
+	jq = {
+		description = "Process JSON from the command line",
+		source = { kind = "github", repo = "jqlang/jq" },
+		version_prefix = "jq-",
+		installer = "artifact",
+		targets = {
+			["linux-amd64"] = { asset = "jq-linux-amd64", format = "binary", bins = { jq = "." } },
+			["linux-arm64"] = { asset = "jq-linux-arm64", format = "binary", bins = { jq = "." } },
+		},
+		checksum = { asset = "sha256sum.txt", format = "gnu" },
+		verify = { jq = { "--version" } },
+	},
+	zoxide = github("ajeetdsouza/zoxide", {
+		amd64 = "zoxide-{version}-x86_64-unknown-linux-musl.tar.gz",
+		arm64 = "zoxide-{version}-aarch64-unknown-linux-musl.tar.gz",
+	}, { zoxide = "zoxide" }, { kind = "github_digest" }, { zoxide = { "--version" } }),
+	stern = github("stern/stern", {
+		amd64 = "stern_{version}_linux_amd64.tar.gz",
+		arm64 = "stern_{version}_linux_arm64.tar.gz",
+	}, { stern = "stern" }, { asset = "checksums.txt", format = "gnu" }, { stern = { "--version" } }),
 	tofu = github("opentofu/opentofu", {
 		amd64 = "tofu_{version}_linux_amd64.tar.gz",
 		arm64 = "tofu_{version}_linux_arm64.tar.gz",
@@ -91,6 +111,8 @@ M.bundled = {
 }
 
 for id, description in pairs({
+	zoxide = "Navigate frequently used directories",
+	stern = "Follow logs across Kubernetes pods",
 	tofu = "Manage infrastructure with OpenTofu",
 	gh = "GitHub command line",
 	rg = "Search file contents, fast",
@@ -132,6 +154,14 @@ function M.validate(id, recipe)
 		id .. ": unsupported installer"
 	)
 	local source = recipe.source
+	if recipe.version_prefix ~= nil then
+		assert(
+			type(recipe.version_prefix) == "string"
+				and recipe.version_prefix ~= ""
+				and not recipe.version_prefix:find("[%c%s]"),
+			id .. ": invalid version prefix"
+		)
+	end
 	assert(type(source) == "table", id .. ": missing source")
 	assert(vim.tbl_contains({ "github", "gitlab", "direct", "pypi" }, source.kind), id .. ": unsupported source")
 	assert((source.kind == "pypi") == (recipe.installer == "uv"), id .. ": PyPI requires the uv installer")
@@ -231,10 +261,15 @@ function M.validate(id, recipe)
 	return recipe
 end
 
-function M.load(overrides)
+function M.load(entries, overrides)
 	local result = vim.deepcopy(M.bundled)
-	for id, recipe in pairs(overrides or {}) do
+	for id, recipe in pairs(entries or {}) do
 		result[id] = vim.deepcopy(recipe)
+	end
+	for id, patch in pairs(overrides or {}) do
+		assert(result[id], "Cannot override unknown tool: " .. tostring(id))
+		assert(type(patch) == "table", "Invalid recipe override: " .. id)
+		result[id] = vim.tbl_deep_extend("force", result[id], patch)
 	end
 	for id, recipe in pairs(result) do
 		M.validate(id, recipe)

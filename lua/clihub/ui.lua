@@ -72,7 +72,7 @@ local function selected()
 end
 
 local function is_update(state)
-	return not state.pin and u.compare(state.available, state.installed) == 1
+	return not state.pin and state.comparison == 1
 end
 
 local function source_label(source)
@@ -180,19 +180,17 @@ function M.render()
 				if state.progress then
 					icon, color, label = "↻", "Progress", state.progress
 				elseif state.error then
-					icon, color, label = "!", "Error", "Failed · Enter for details"
+					icon, color, label = "!", "Error", state.error
 				elseif is_update(state) then
 					icon, color, label = "↑", "Update", state.installed .. " → " .. state.available
 				elseif state.pin and state.installed then
 					icon, color, label =
 						"◆",
 						"Pin",
-						state.installed
-							.. "  pinned"
-							.. (u.compare(state.available, state.installed) == 1 and " · newer available" or "")
-				elseif u.compare(state.available, state.installed) == -1 then
+						state.installed .. "  pinned" .. (state.comparison == 1 and " · newer available" or "")
+				elseif state.comparison == -1 then
 					icon, color, label = "✓", "Muted", state.installed .. " · newer than upstream"
-				elseif state.installed and state.available and u.compare(state.available, state.installed) == nil then
+				elseif state.installed and state.available and state.comparison == nil then
 					icon, color, label = "?", "Update", state.installed .. " · different release"
 				elseif state.installed then
 					icon, color, label =
@@ -244,12 +242,15 @@ function M.render()
 					end
 					if state.error then
 						line({}, state.id)
-						local message = state.error:match("^(.-)\nstack traceback:") or state.error
-						for _, text in ipairs(vim.split(message, "\n", { trimempty = true })) do
-							line({ { "      " .. text, "Error" } }, state.id)
-						end
+						line({ { "      " .. state.error, "Error" } }, state.id)
+					end
+					if state.log then
+						field("Log", "l open · y copy diagnostics", "Progress")
 					end
 					local result = hub.results[state.id]
+					if result and result.log_error then
+						line({ { "      Could not save log: " .. result.log_error, "Update" } }, state.id)
+					end
 					for _, warning in ipairs((result and result.result and result.result.warnings) or {}) do
 						line({ { "      " .. warning, "Update" } }, state.id)
 					end
@@ -290,6 +291,7 @@ function M.render()
 		{ "/", "Key" },
 		{ " search", "Muted" },
 	})
+	line({ { "  l", "Key" }, { " operation log    ", "Muted" }, { "y", "Key" }, { " copy diagnostics", "Muted" } })
 	line({
 		{ "  U", "Key" },
 		{ " update all installed    ", "Muted" },
@@ -360,7 +362,7 @@ function M.open()
 			end
 			local ok, err = pcall(require("clihub").command, { action, id })
 			if not ok then
-				vim.notify(tostring(err), vim.log.levels.ERROR)
+				vim.notify(require("clihub.log").summary(err), vim.log.levels.ERROR)
 			end
 		end, "clihub " .. action)
 	end
@@ -368,7 +370,7 @@ function M.open()
 		map(key, function()
 			local ok, err = pcall(require("clihub").command, { action })
 			if not ok then
-				vim.notify(tostring(err), vim.log.levels.ERROR)
+				vim.notify(require("clihub.log").summary(err), vim.log.levels.ERROR)
 			end
 		end, "clihub " .. action .. " installed")
 	end
@@ -377,10 +379,21 @@ function M.open()
 		if id then
 			local ok, err = pcall(require("clihub").open_release, id)
 			if not ok then
-				vim.notify(tostring(err), vim.log.levels.ERROR)
+				vim.notify(require("clihub.log").summary(err), vim.log.levels.ERROR)
 			end
 		end
 	end, "Open release notes")
+	for key, action in pairs({ l = "log", y = "copy-log" }) do
+		map(key, function()
+			local id = selected()
+			if id then
+				local ok, err = pcall(require("clihub").command, { action, id })
+				if not ok then
+					vim.notify(require("clihub.log").summary(err), vim.log.levels.ERROR)
+				end
+			end
+		end, action == "log" and "Open operation log" or "Copy diagnostics")
+	end
 	map("<CR>", function()
 		local id = selected()
 		if id then

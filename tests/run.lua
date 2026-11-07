@@ -94,7 +94,7 @@ end
 
 check("registry validates every bundled target and rejects traversal/templates", function()
 	local registry = require("clihub.registry")
-	equal(vim.tbl_count(registry.load()), 10)
+	equal(vim.tbl_count(registry.load()), 13)
 	for _, target in ipairs({ "linux-amd64", "linux-arm64" }) do
 		for id, entry in pairs(registry.bundled) do
 			assert(registry.target(entry, target), id .. " missing " .. target)
@@ -150,6 +150,41 @@ check("Python recipes validate names and resolve PyPI versions and release links
 	raises(function()
 		registry.validate("pgcli", entry)
 	end, "PyPI requires")
+end)
+
+check("partial overrides preserve targets, replace argument lists, and validate the final recipe", function()
+	local registry = require("clihub.registry")
+	local patch = {
+		fastfetch = {
+			targets = {
+				[platform] = {
+					asset = "fastfetch-linux-amd64-polyfilled.tar.gz",
+					bins = { fastfetch = "fastfetch-linux-amd64-polyfilled/usr/bin/fastfetch" },
+				},
+			},
+		},
+		probe = { verify = { probe = { "version" } } },
+	}
+	local loaded = registry.load({ probe = recipe }, patch)
+	equal(loaded.fastfetch.targets[platform].asset, patch.fastfetch.targets[platform].asset)
+	equal(loaded.fastfetch.targets[platform].format, "tar.gz")
+	equal(loaded.fastfetch.checksum, registry.bundled.fastfetch.checksum)
+	equal(loaded.fastfetch.targets["linux-arm64"], registry.bundled.fastfetch.targets["linux-arm64"])
+	equal(loaded.probe.verify.probe, { "version" })
+	equal(recipe.verify.probe, { "--version" })
+	equal(registry.bundled.fastfetch.targets[platform].asset, "fastfetch-linux-amd64.tar.gz")
+	local baseline = registry.load({ probe = recipe })
+	assert(u.fingerprint(loaded.fastfetch) ~= u.fingerprint(baseline.fastfetch))
+	raises(function()
+		registry.load({}, { unknown = {} })
+	end, "unknown tool")
+	raises(function()
+		registry.load({}, { fastfetch = { targets = { [platform] = { bins = { fastfetch = "../outside" } } } } })
+	end, "invalid member path")
+	-- Existing registry entries still replace a full recipe, rather than inheriting fields.
+	raises(function()
+		registry.load({ fastfetch = { description = "incomplete" } })
+	end, "unsupported installer")
 end)
 
 check("checksum parser matches exact names, rejects duplicates and missing hashes", function()
@@ -540,6 +575,9 @@ check("version comparison orders upgrades, downgrades, prereleases, and ignores 
 	equal(u.compare("v1.2.3+build.1", "1.2.3+build.2"), 0)
 	equal(u.compare("release-2026-10", "nightly-42"), nil)
 	equal(u.compare("nightly-42", "nightly-42"), 0)
+	equal(u.compare("jq-1.10.0", "jq-1.8.2", "jq-"), 1)
+	equal(u.compare("jq-1.8.2", "jq-1.10.0", "jq-"), -1)
+	equal(u.compare("jq-1.8.2", "jq-1.10.0"), nil)
 end)
 
 check("batch installs bootstrap requested uv before Python tools", function()
@@ -560,6 +598,221 @@ check("batch installs bootstrap requested uv before Python tools", function()
 		assert(results.uv.ok and results.pgcli.ok)
 	end)
 	install.apply = saved
+	hub.setup({ root = root, path = "none", registry = { probe = recipe } })
+	assert(ok, err)
+end)
+
+check("update checks overlap within the limit, isolate failures, and finish before queued installs", function()
+	local saved_fetch, saved_apply = u.fetch, install.apply
+	local entries, ids = { probe = recipe }, { "check_a", "check_b", "check_bad", "check_c", "check_d" }
+	for _, id in ipairs(ids) do
+		entries[id] = {
+			source = { kind = "direct", latest = "https://example.test/check/" .. id },
+			installer = "artifact",
+			targets = {
+				[platform] = {
+					format = "binary",
+					url = "https://example.test/probe",
+					bins = { [id] = "." },
+					checksum = { url = "https://example.test/sha", format = "raw" },
+				},
+			},
+			verify = { [id] = { "--version" } },
+		}
+	end
+	local active, peak, calls, completed = 0, 0, 0, false
+	u.fetch = function(url)
+		local id = url:match("/check/(.+)$")
+		if not id then
+			return saved_fetch(url)
+		end
+		calls, active = calls + 1, active + 1
+		peak = math.max(peak, active)
+		u.run({ "sh", "-c", "sleep 0.02; printf '%s\\n' \"$1\"", "clihub-test", id })
+		active = active - 1
+		if id == "check_bad" then
+			error("fixture lookup failed")
+		end
+		return "v2.0.0"
+	end
+	install.apply = function(...)
+		assert(completed and active == 0, "An installation started before checks completed")
+		return saved_apply(...)
+	end
+	local ok, err = pcall(function()
+		hub.setup({
+			root = workspace .. "/parallel",
+			path = "none",
+			check_concurrency = 2,
+			registry = entries,
+			overrides = { probe = { description = "patched custom recipe" } },
+		})
+		equal(hub.registry.probe.description, "patched custom recipe")
+		local results, installed, callbacks = nil, nil, 0
+		hub.run("check", vim.list_extend(vim.deepcopy(ids), { "check_a" }), function(value)
+			results, completed, callbacks = value, true, callbacks + 1
+		end)
+		equal(hub.status("check_d").progress, "queued check")
+		hub.run("install", { "probe" }, function(value)
+			installed = value
+		end)
+		assert(vim.wait(10000, function()
+			return installed ~= nil
+		end, 10))
+		equal(peak, 2)
+		equal(calls, #ids)
+		equal(callbacks, 1)
+		assert(not results.check_bad.ok and installed.probe.ok and not hub.busy)
+		for _, id in ipairs(ids) do
+			local text = u.read(results[id].log)
+			assert(text:find(id, 1, true))
+			assert(not hub.status(id).progress)
+			if id ~= "check_bad" then
+				assert(results[id].ok and hub.status(id).available == "v2.0.0")
+				assert(not text:find("check_bad", 1, true), "Concurrent logs were mixed")
+			end
+		end
+		-- Setting one worker preserves fully serial checks.
+		peak, completed = 0, false
+		hub.setup({ root = workspace .. "/serial-check", path = "none", check_concurrency = 1, registry = entries })
+		hub.run("check", { "check_a", "check_b" }, function()
+			completed = true
+		end)
+		assert(vim.wait(5000, function()
+			return completed
+		end, 10))
+		equal(peak, 1)
+		raises(function()
+			hub.setup({ check_concurrency = 0 })
+		end, "check_concurrency")
+	end)
+	u.fetch, install.apply = saved_fetch, saved_apply
+	hub.setup({ root = root, path = "none", registry = { probe = recipe } })
+	assert(ok, err)
+end)
+
+check("parallel GitHub checks resolve gh credentials once and keep them out of logs", function()
+	local saved_run, saved_fetch, saved_executable = u.run, u.fetch, vim.fn.executable
+	local saved_gh, saved_github = vim.env.GH_TOKEN, vim.env.GITHUB_TOKEN
+	local secret, lookups, active, peak = "parallel-github-test-token", 0, 0, 0
+	local entries, ids = {}, { "auth_a", "auth_b", "auth_c" }
+	for _, id in ipairs(ids) do
+		entries[id] = vim.deepcopy(recipe)
+		entries[id].source.repo = "example/" .. id
+	end
+	vim.env.GH_TOKEN, vim.env.GITHUB_TOKEN = nil, nil
+	vim.fn.executable = function(name)
+		return name == "gh" and 1 or saved_executable(name)
+	end
+	u.fetch = original_fetch
+	u.run = function(args, opts)
+		if args[1] == "gh" then
+			lookups = lookups + 1
+			saved_run({ "sleep", "0.01" })
+			return secret .. "\n"
+		elseif args[1] == "curl" then
+			assert(opts.sensitive and opts.stdin:find(secret, 1, true))
+			assert(not table.concat(args, " "):find(secret, 1, true))
+			active = active + 1
+			peak = math.max(peak, active)
+			saved_run({ "sleep", "0.02" })
+			active = active - 1
+			local url = args[vim.fn.index(args, "--url") + 2]
+			for i, value in ipairs(args) do
+				if value == "--dump-header" then
+					u.write(args[i + 1], "HTTP/2 200\r\n\r\n")
+				end
+				if value == "--output" then
+					u.write(args[i + 1], saved_fetch(url))
+				end
+			end
+			return "200"
+		end
+		return saved_run(args, opts)
+	end
+	local ok, err = pcall(function()
+		hub.setup({
+			root = workspace .. "/parallel-auth",
+			path = "none",
+			registry = entries,
+			github = { use_gh = true },
+		})
+		local results
+		hub.run("check", ids, function(value)
+			results = value
+		end)
+		assert(vim.wait(5000, function()
+			return results ~= nil
+		end, 10))
+		equal(lookups, 1)
+		equal(peak, 3)
+		for _, id in ipairs(ids) do
+			assert(results[id].ok, results[id].error)
+			assert(not u.read(results[id].log):find(secret, 1, true))
+		end
+	end)
+	u.run, u.fetch, vim.fn.executable = saved_run, saved_fetch, saved_executable
+	vim.env.GH_TOKEN, vim.env.GITHUB_TOKEN = saved_gh, saved_github
+	hub.setup({ root = root, path = "none", registry = { probe = recipe } })
+	assert(ok, err)
+end)
+
+check("diagnostics keep full private logs and show concise redacted errors", function()
+	local saved_fetch, saved_notify = u.fetch, vim.notify
+	local secret, notices = "diagnostic-test-token", {}
+	local managed = workspace .. "/diagnostics"
+	hub.setup({
+		root = managed,
+		path = "none",
+		registry = { probe = recipe },
+		github = {
+			token = function()
+				return secret
+			end,
+		},
+	})
+	vim.notify = function(message)
+		notices[#notices + 1] = message
+	end
+	u.fetch = function()
+		pcall(
+			u.run,
+			{ "sh", "-c", "printf '%s' \"$1\"; exit 1", "clihub-test", "sensitive-output-must-not-be-logged" },
+			{ sensitive = true }
+		)
+		return u.run({
+			"sh",
+			"-c",
+			'printf \'fixture download failed\\n%s\\n%s\\nend-of-full-output\\n\' "$1" "$2" >&2; exit 1',
+			"clihub-test",
+			secret,
+			string.rep("x", 6000),
+		})
+	end
+	local ok, err = pcall(function()
+		hub.run("check", { "probe" })
+		assert(vim.wait(5000, function()
+			return not hub.busy
+		end, 10))
+		local result = hub.results.probe
+		assert(not result.ok and result.log)
+		equal(hub.status("probe").error, "fixture download failed")
+		local text = u.read(result.log)
+		assert(text:find("end-of-full-output", 1, true) and text:find("stack traceback:", 1, true))
+		assert(not text:find(secret, 1, true) and not result.error:find(secret, 1, true))
+		assert(not text:find("sensitive-output-must-not-be-logged", 1, true))
+		assert(text:find("[redacted]", 1, true))
+		equal(uv.fs_stat(result.log).mode % 512, 384)
+		assert(not table.concat(notices, "\n"):find("stack traceback:", 1, true))
+		assert(table.concat(notices, "\n"):find(":CliHub log probe", 1, true))
+		local summary = require("clihub.log").summary(
+			"/tmp/difft: version `GLIBC_2.32' not found\n/tmp/difft: version `GLIBC_2.34' not found"
+		)
+		assert(summary:find("glibc 2.34", 1, true))
+		hub.setup({ root = managed, path = "none", registry = { probe = recipe } })
+		equal(hub.status("probe").log, result.log)
+	end)
+	u.fetch, vim.notify = saved_fetch, saved_notify
 	hub.setup({ root = root, path = "none", registry = { probe = recipe } })
 	assert(ok, err)
 end)
