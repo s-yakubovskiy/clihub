@@ -2,7 +2,7 @@
 
 A small Neovim registry and installer for user-managed CLI tools. Commands installed by clihub can be used from Neovim and ordinary terminals.
 
-Requires Neovim 0.10+, Linux x86_64 or arm64, curl 7.76+, GNU tar, and sha256sum. No Lua dependencies. Current recipes: `kubectl`, `rg`, `grpcurl`, `k9s`, `gh`, `glab`, `uv` (also exports `uvx`), `fastfetch`, `pgcli`, `tofu` (OpenTofu), `jq`, `zoxide`, and `stern`. Python tools additionally require uv and an installed Python 3.10+.
+Requires Neovim 0.10+, Linux x86_64 or arm64, curl 7.76+, GNU tar, and sha256sum. No Lua dependencies. Current recipes: `kubectl`, `rg`, `grpcurl`, `k9s`, `gh`, `glab`, `uv` (also exports `uvx`), `fastfetch`, `pgcli`, `tofu` (OpenTofu), `jq`, `zoxide`, `stern`, and `bao` (OpenBao). Python tools additionally require uv and an installed Python 3.10+.
 
 ## Setup
 
@@ -38,6 +38,7 @@ The abbreviation expands when you press Space or Enter; scripts and mappings sho
 :CliHub
 :CliHub install kubectl rg grpcurl k9s
 :CliHub install jq zoxide stern
+:CliHub install bao
 :CliHub check
 :CliHub update
 :CliHub update rg

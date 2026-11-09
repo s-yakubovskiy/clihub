@@ -94,7 +94,7 @@ end
 
 check("registry validates every bundled target and rejects traversal/templates", function()
 	local registry = require("clihub.registry")
-	equal(vim.tbl_count(registry.load()), 13)
+	equal(vim.tbl_count(registry.load()), 14)
 	for _, target in ipairs({ "linux-amd64", "linux-arm64" }) do
 		for id, entry in pairs(registry.bundled) do
 			assert(registry.target(entry, target), id .. " missing " .. target)

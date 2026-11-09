@@ -17,6 +17,10 @@ local function github(repo, assets, bins, checksum, verify)
 end
 
 M.bundled = {
+	bao = github("openbao/openbao", {
+		amd64 = "openbao_{version}_linux_amd64.tar.gz",
+		arm64 = "openbao_{version}_linux_arm64.tar.gz",
+	}, { bao = "bao" }, { kind = "github_digest" }, { bao = { "version" } }),
 	jq = {
 		description = "Process JSON from the command line",
 		source = { kind = "github", repo = "jqlang/jq" },
@@ -111,6 +115,7 @@ M.bundled = {
 }
 
 for id, description in pairs({
+	bao = "Manage secrets with OpenBao",
 	zoxide = "Navigate frequently used directories",
 	stern = "Follow logs across Kubernetes pods",
 	tofu = "Manage infrastructure with OpenTofu",
