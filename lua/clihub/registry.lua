@@ -112,6 +112,10 @@ M.bundled = {
 		amd64 = { fastfetch = "fastfetch-linux-amd64/usr/bin/fastfetch" },
 		arm64 = { fastfetch = "fastfetch-linux-aarch64/usr/bin/fastfetch" },
 	}, { kind = "github_digest" }, { fastfetch = { "--version" } }),
+	figlet = github("damienbutt/figlet", {
+		amd64 = "figlet_{version}_linux_amd64.tar.gz",
+		arm64 = "figlet_{version}_linux_arm64.tar.gz",
+	}, { figlet = "figlet" }, { kind = "github_digest" }, { figlet = { "--version" } }),
 }
 
 for id, description in pairs({
@@ -125,6 +129,7 @@ for id, description in pairs({
 	k9s = "Explore and manage Kubernetes clusters",
 	uv = "Manage Python packages and environments",
 	fastfetch = "Display system information",
+	figlet = "Render text as ASCII art (Go FIGlet)",
 }) do
 	M.bundled[id].description = description
 end
