@@ -271,7 +271,7 @@ function M.curl(url, allow_http_errors)
 		url,
 	}
 	if not allow_http_errors then
-		args[#args + 1] = "--fail-with-body"
+		args[#args + 1] = "--fail"
 	end
 	return args
 end
