@@ -21,6 +21,10 @@ M.bundled = {
 		amd64 = "openbao_{version}_linux_amd64.tar.gz",
 		arm64 = "openbao_{version}_linux_arm64.tar.gz",
 	}, { bao = "bao" }, { kind = "github_digest" }, { bao = { "version" } }),
+	doggo = github("mr-karan/doggo", {
+		amd64 = "doggo-linux-x86_64.tar.gz",
+		arm64 = "doggo-linux-aarch64.tar.gz",
+	}, { doggo = "doggo" }, { kind = "github_digest" }, { doggo = { "--version" } }),
 	jq = {
 		description = "Process JSON from the command line",
 		source = { kind = "github", repo = "jqlang/jq" },
@@ -120,6 +124,7 @@ M.bundled = {
 
 for id, description in pairs({
 	bao = "Manage secrets with OpenBao",
+	doggo = "Query DNS from the command line",
 	zoxide = "Navigate frequently used directories",
 	stern = "Follow logs across Kubernetes pods",
 	tofu = "Manage infrastructure with OpenTofu",
